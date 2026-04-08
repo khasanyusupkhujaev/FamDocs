@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
 import os
@@ -22,6 +21,7 @@ from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from bot import branding
 from bot import db
 from bot.billing import (
     UPGRADE_EXTRA_SLOTS,
@@ -131,13 +131,6 @@ async def _init_context_from_raw(init_data: str) -> InitContext:
         raise HTTPException(status_code=401, detail="Invalid init data") from None
 
 
-def _png_data_uri(path: Path) -> str | None:
-    if not path.is_file():
-        return None
-    b64 = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:image/png;base64,{b64}"
-
-
 def build_spa_html(webapp_dir: Path) -> str:
     """
     Inline CSS/JS (and logos) into index.html.
@@ -185,8 +178,18 @@ def build_spa_html(webapp_dir: Path) -> str:
         '<script src="/static/app.js"></script>',
         f"<script>\n{i18n_block}{js}\n</script>",
     )
-    transparent = _png_data_uri(LOGO_TRANSPARENT_PATH) or _png_data_uri(LOGO_SOLID_PATH)
-    solid = _png_data_uri(LOGO_SOLID_PATH) or _png_data_uri(LOGO_TRANSPARENT_PATH)
+    transparent = (
+        branding.spa_data_uri_transparent()
+        or branding.png_data_uri_from_path(LOGO_TRANSPARENT_PATH)
+        or branding.spa_data_uri_solid()
+        or branding.png_data_uri_from_path(LOGO_SOLID_PATH)
+    )
+    solid = (
+        branding.spa_data_uri_solid()
+        or branding.png_data_uri_from_path(LOGO_SOLID_PATH)
+        or branding.spa_data_uri_transparent()
+        or branding.png_data_uri_from_path(LOGO_TRANSPARENT_PATH)
+    )
     if transparent:
         html = html.replace('"/brand/logo-transparent.png"', f'"{transparent}"')
     if solid:
@@ -199,6 +202,7 @@ def create_webapp_app() -> FastAPI:
     async def _lifespan(_app: FastAPI):
         await db.init_db()
         init_paytech_db()
+        await branding.load_branding_assets()
         yield
 
     app = FastAPI(
@@ -719,24 +723,32 @@ def create_webapp_app() -> FastAPI:
 
     @app.get("/brand/logo-transparent.png")
     async def brand_logo_transparent():
+        await branding.load_branding_assets()
+        data = branding.get_transparent_bytes() or branding.get_solid_bytes()
+        if data:
+            return Response(content=data, media_type="image/png")
         if LOGO_TRANSPARENT_PATH.is_file():
             return FileResponse(LOGO_TRANSPARENT_PATH, media_type="image/png")
         if LOGO_SOLID_PATH.is_file():
             return FileResponse(LOGO_SOLID_PATH, media_type="image/png")
         raise HTTPException(
             status_code=404,
-            detail="Add Logo_transparent.png or Logo.png to the project root",
+            detail="Add logos to R2 (see FAMDOC_LOGO_*_KEY) or Logo_*.png in the project root",
         )
 
     @app.get("/brand/logo.png")
     async def brand_logo_solid():
+        await branding.load_branding_assets()
+        data = branding.get_solid_bytes() or branding.get_transparent_bytes()
+        if data:
+            return Response(content=data, media_type="image/png")
         if LOGO_SOLID_PATH.is_file():
             return FileResponse(LOGO_SOLID_PATH, media_type="image/png")
         if LOGO_TRANSPARENT_PATH.is_file():
             return FileResponse(LOGO_TRANSPARENT_PATH, media_type="image/png")
         raise HTTPException(
             status_code=404,
-            detail="Add Logo.png or Logo_transparent.png to the project root",
+            detail="Add logos to R2 (see FAMDOC_LOGO_*_KEY) or Logo_*.png in the project root",
         )
 
     # Static assets MUST NOT be mounted at "/" — that catches /api/* and returns 404
@@ -749,6 +761,7 @@ def create_webapp_app() -> FastAPI:
 
     @app.get("/")
     async def spa_index():
+        await branding.load_branding_assets()
         return HTMLResponse(
             content=build_spa_html(webapp_dir),
             media_type="text/html",

@@ -6,15 +6,12 @@ from datetime import datetime, timezone
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, FSInputFile, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from bot import db
 from bot.billing import effective_document_cap
-from bot.config import (
-    LOGO_SOLID_PATH,
-    LOGO_TRANSPARENT_PATH,
-    WEBAPP_PUBLIC_URL,
-)
+from bot.branding import telegram_logo_input
+from bot.config import WEBAPP_PUBLIC_URL
 from bot.preview import build_preview_jpeg
 from bot.keyboards import (
     CATEGORY_EMOJI,
@@ -58,14 +55,6 @@ async def _apply_invite_token(message: Message, state: FSMContext, token: str) -
     await message.answer(txt, parse_mode="HTML", reply_markup=main_reply_keyboard())
     await state.set_state(VaultStates.main)
     await state.update_data(category=None)
-
-
-def _bot_logo_path():
-    if LOGO_TRANSPARENT_PATH.is_file():
-        return LOGO_TRANSPARENT_PATH
-    if LOGO_SOLID_PATH.is_file():
-        return LOGO_SOLID_PATH
-    return None
 
 
 def _format_category_view(category: str, rows: list) -> str:
@@ -157,10 +146,10 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         "<b>buttons under the message</b>, then send your file.\n\n"
         "Commands: <code>/help</code>, <code>/browse</code>, <code>/join</code>."
     )
-    logo = _bot_logo_path()
+    logo = await telegram_logo_input()
     kb = main_reply_keyboard()
     if logo:
-        await message.answer_photo(FSInputFile(logo))
+        await message.answer_photo(logo)
     await message.answer(intro, reply_markup=kb, parse_mode="HTML")
 
 

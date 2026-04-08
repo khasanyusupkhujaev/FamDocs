@@ -17,6 +17,7 @@ from bot.config import (
     WEBAPP_PORT,
     WEBAPP_PUBLIC_URL,
 )
+from bot.branding import load_branding_assets
 from bot.db import init_db
 from bot.handlers import setup_routers
 from bot.webapp_server import create_webapp_app
@@ -35,6 +36,7 @@ async def main() -> None:
     if STORAGE_BACKEND == "local":
         STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     await init_db()
+    await load_branding_assets()
 
     bot = Bot(
         token=BOT_TOKEN,

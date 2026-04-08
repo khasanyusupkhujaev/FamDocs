@@ -156,9 +156,13 @@ CLICK_TEST_MODE = os.getenv("FAMDOC_CLICK_TEST", "1").strip().lower() in (
     "yes",
 )
 
-# Optional branding in project root (same folder as `bot/`)
+# Optional branding: local files and/or objects in the same R2/S3 bucket as document blobs.
 LOGO_TRANSPARENT_PATH = BASE_DIR / "Logo_transparent.png"
 LOGO_SOLID_PATH = BASE_DIR / "Logo.png"
+# Full object keys in the bucket (not relative to family id). If unset with S3, defaults to
+# "{S3_PREFIX}/brand/Logo_transparent.png" and "{S3_PREFIX}/brand/Logo.png".
+LOGO_TRANSPARENT_S3_KEY = os.getenv("FAMDOC_LOGO_TRANSPARENT_KEY", "").strip()
+LOGO_SOLID_S3_KEY = os.getenv("FAMDOC_LOGO_SOLID_KEY", "").strip()
 
 # For invite deep links: https://t.me/<username>?start=join_TOKEN
 BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")

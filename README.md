@@ -5,7 +5,7 @@ Telegram bot and **Telegram Mini App** for sharing and organizing family documen
 ## Features
 
 - Vaults, documents, previews, and family invites via Telegram and the web Mini App
-- Optional **S3-compatible** storage (e.g. Cloudflare R2) with optional **AES-256-GCM** encryption for blobs
+- Optional **S3-compatible** storage (e.g. Cloudflare R2) with optional **AES-256-GCM** encryption for blobs; **branding PNGs** can live in the same bucket (`FAMDOC_LOGO_*_KEY` or `{prefix}/brand/`)
 - **SQLite** metadata and entitlements (`FAMDOC_DATA_DIR`, default `./data`)
 - Billing: **Telegram Stars** / provider token, or **PayTech.uz** (Payme / Click) with HTTPS webhooks
 

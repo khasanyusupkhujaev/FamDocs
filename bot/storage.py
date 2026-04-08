@@ -222,6 +222,28 @@ class S3BlobBackend(BlobBackend):
 
         await asyncio.to_thread(_del)
 
+    async def read_raw_key(self, key: str) -> bytes | None:
+        """GetObject by full key (e.g. branding assets under a fixed path)."""
+
+        def _get() -> bytes | None:
+            from botocore.exceptions import ClientError  # noqa: PLC0415
+
+            try:
+                o = self._client.get_object(Bucket=self._bucket, Key=key)
+            except ClientError as e:
+                code = e.response.get("Error", {}).get("Code", "")
+                if code in ("404", "NoSuchKey", "NotFound"):
+                    return None
+                if code == "AccessDenied":
+                    raise StorageAccessDeniedError(
+                        "R2/S3 denied read (GetObject) for branding or static key. "
+                        "Use an API token with Object Read on this bucket."
+                    ) from e
+                raise
+            return o["Body"].read()
+
+        return await asyncio.to_thread(_get)
+
 
 _backend: BlobBackend | None = None
 
@@ -243,6 +265,19 @@ def get_backend() -> BlobBackend:
     if _backend is None:
         _backend = _make_backend()
     return _backend
+
+
+async def read_bucket_key(key: str) -> bytes | None:
+    """
+    Read one object by its full bucket key (not family_chat_id layout).
+    Returns None for local storage or missing object.
+    """
+    if STORAGE_BACKEND != "s3":
+        return None
+    backend = get_backend()
+    if not isinstance(backend, S3BlobBackend):
+        return None
+    return await backend.read_raw_key(key)
 
 
 async def save_upload(
