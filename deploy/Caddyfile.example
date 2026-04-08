@@ -1,0 +1,7 @@
+# Replace YOUR_DOMAIN with a real hostname (A record → your server IP).
+# Run Caddy on the host or as another container; proxy to FamDoc on 127.0.0.1:8080
+# (matches docker-compose published port).
+
+YOUR_DOMAIN {
+	reverse_proxy 127.0.0.1:8080
+}

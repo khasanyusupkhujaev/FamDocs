@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#e8f4fc" />
+    <title>FamDocs</title>
+    <link
+      rel="icon"
+      href="/brand/logo-transparent.png"
+      type="image/png"
+      sizes="any"
+    />
+    <link rel="apple-touch-icon" href="/brand/logo.png" />
+    <!-- Same-origin script so Mini App WebViews that block telegram.org still get initData -->
+    <script src="/static/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div id="no-tg" class="banner-warn hidden" data-i18n="noTgBanner"></div>
+
+    <div class="app-shell" id="app-shell">
+      <aside class="sidebar collapsed-mobile" id="sidebar" aria-label="Categories">
+        <div class="sidebar-brand">
+          <img
+            src="/brand/logo-transparent.png"
+            alt="FamDocs"
+            class="brand-logo-lg"
+            width="48"
+            height="48"
+            decoding="async"
+          />
+          <div>
+            <div class="brand-title" data-i18n="brandTitle"></div>
+            <div class="brand-sub" data-i18n="headerTitle"></div>
+          </div>
+          <button
+            type="button"
+            class="sidebar-close"
+            id="sidebar-close"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+        <div class="secure-pill">
+          <span class="lock">🔒</span> <span data-i18n="securePill"></span>
+        </div>
+        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+        <div class="sidebar-footer">
+          <button type="button" class="cloud-btn" id="btn-family-sidebar">
+            👨‍👩‍👧 <span data-i18n="familyMenu"></span>
+          </button>
+          <button type="button" class="cloud-btn" disabled>
+            ☁️ <span data-i18n="cloudBtn"></span>
+          </button>
+          <p class="cloud-hint" data-i18n="cloudHint"></p>
+        </div>
+      </aside>
+      <div class="sidebar-scrim" id="sidebar-scrim" hidden></div>
+
+      <div class="main-column">
+        <header class="topbar">
+          <button
+            type="button"
+            class="icon-btn menu-toggle"
+            id="menu-toggle"
+            aria-label="Menu"
+          >
+            ☰
+          </button>
+          <div class="family-block">
+            <div class="avatar brand-avatar" id="family-avatar">
+              <img
+                src="/brand/logo-transparent.png"
+                alt=""
+                class="brand-logo-sm"
+                width="36"
+                height="36"
+                decoding="async"
+              />
+            </div>
+            <div class="family-text-col">
+              <div class="family-name" id="family-name"></div>
+              <div class="family-meta" id="family-meta"></div>
+            </div>
+          </div>
+          <div class="topbar-actions">
+            <label class="lang-wrap">
+              <span class="sr-only" data-i18n="langLabel"></span>
+              <select id="lang-select" class="lang-select" aria-label="Language"></select>
+            </label>
+            <button type="button" class="icon-btn" id="bulk-toggle" title="Select">
+              ☑️
+            </button>
+          </div>
+        </header>
+
+        <div class="search-row">
+          <div class="search-wrap">
+            <span class="search-ico">🔍</span>
+            <input
+              type="search"
+              id="search-input"
+              data-i18n-placeholder="searchPlaceholder"
+              placeholder=""
+              autocomplete="off"
+            />
+          </div>
+          <button type="button" class="btn-primary" id="btn-add-doc" data-i18n="addDocument"></button>
+        </div>
+
+        <div class="bulk-bar hidden" id="bulk-bar">
+          <span id="bulk-count">0</span>
+          <button type="button" class="btn-soft" id="bulk-dl" data-i18n="downloadZip"></button>
+          <button type="button" class="btn-soft" id="bulk-move" data-i18n="move"></button>
+          <button type="button" class="btn-danger" id="bulk-del" data-i18n="delete"></button>
+          <button type="button" class="btn-link" id="bulk-cancel" data-i18n="cancel"></button>
+        </div>
+
+        <main class="content" id="main-content">
+          <div id="doc-grid" class="doc-grid"></div>
+          <div id="doc-empty" class="empty-state hidden">
+            <div class="empty-illu">📄</div>
+            <p class="empty-title" data-i18n="emptyTitle"></p>
+            <p class="empty-text" data-i18n="emptyText"></p>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="family-modal" role="dialog" aria-modal="true">
+      <div class="modal sheet large">
+        <div class="panel-head">
+          <h2 data-i18n="familyTitle"></h2>
+          <button type="button" class="icon-btn" id="family-close">✕</button>
+        </div>
+        <h3 class="family-subtitle" data-i18n="joinFamilySection"></h3>
+        <p class="field-hint" data-i18n="joinFamilyPasteHint"></p>
+        <textarea
+          id="join-invite-paste"
+          class="field-input area"
+          rows="2"
+          data-i18n-placeholder="joinInvitePlaceholder"
+          placeholder=""
+        ></textarea>
+        <button type="button" class="btn-primary wide" id="join-accept-btn" data-i18n="joinAccept"></button>
+        <hr class="family-sep" />
+        <p class="field-hint" data-i18n="familyHint"></p>
+        <ul id="family-members" class="family-list"></ul>
+        <label class="field-label" data-i18n="invitePhoneLabel"></label>
+        <input type="tel" id="invite-phone" class="field-input" autocomplete="tel" />
+        <p class="field-hint" data-i18n="invitePhoneHint"></p>
+        <button type="button" class="btn-primary wide" id="invite-generate" data-i18n="inviteCreate"></button>
+        <div id="invite-box" class="hidden invite-box">
+          <p class="field-hint" data-i18n="inviteLinkLabel"></p>
+          <div class="invite-link-row">
+            <input type="text" readonly id="invite-url" class="field-input" />
+            <button type="button" class="btn-soft" id="invite-copy" data-i18n="inviteCopy"></button>
+          </div>
+          <p class="field-hint" id="invite-warn" hidden></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-overlay hidden" id="upload-panel">
+      <div class="panel sheet">
+        <div class="panel-head">
+          <h2 id="upload-panel-title" data-i18n="uploadTitle"></h2>
+          <button type="button" class="icon-btn" id="upload-close">✕</button>
+        </div>
+        <div id="upload-limit-block" class="billing-block hidden">
+          <p class="billing-lead" id="billing-limit-lead"></p>
+          <p class="field-hint" id="billing-limit-hint"></p>
+          <button type="button" class="btn-primary wide" id="btn-buy-slots"></button>
+        </div>
+        <div id="upload-normal-fields">
+        <label class="field-label"><span data-i18n="category"></span></label>
+        <select id="up-category" class="field-input"></select>
+
+        <label class="field-label"><span data-i18n="displayName"></span></label>
+        <input
+          type="text"
+          id="up-display-name"
+          class="field-input"
+          autocomplete="off"
+        />
+        <p class="field-hint" data-i18n="displayNameHint"></p>
+
+        <label class="field-label"
+          ><span data-i18n="tags"></span>
+          <span class="optional" data-i18n="tagsOptional"></span></label
+        >
+        <input
+          type="text"
+          id="up-tags"
+          class="field-input"
+          data-i18n-placeholder="tagsPlaceholder"
+          placeholder=""
+        />
+        <label class="field-label"
+          ><span data-i18n="description"></span>
+          <span class="optional" data-i18n="descriptionOptional"></span></label
+        >
+        <textarea
+          id="up-notes"
+          class="field-input area"
+          rows="2"
+          data-i18n-placeholder="descriptionPlaceholder"
+          placeholder=""
+        ></textarea>
+
+        <div class="drop-zone" id="drop-zone" tabindex="0">
+          <p class="drop-title" data-i18n="dropTitle"></p>
+          <p class="drop-hint" data-i18n="dropHint"></p>
+          <div class="drop-btns">
+            <button type="button" class="btn-soft" id="btn-camera">
+              📷 <span data-i18n="camera"></span>
+            </button>
+            <button type="button" class="btn-soft" id="btn-files">
+              📎 <span data-i18n="files"></span>
+            </button>
+          </div>
+          <input type="file" id="file-input" multiple accept="image/*,.pdf,application/pdf" class="hidden" />
+          <input type="file" id="cam-input" accept="image/*" capture="environment" class="hidden" />
+        </div>
+        <div class="progress-wrap hidden" id="progress-wrap">
+          <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+          <p class="progress-text" id="progress-text"></p>
+        </div>
+        <button type="button" class="btn-primary wide" id="btn-upload-run" disabled data-i18n="uploadQueue"></button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="detail-modal" role="dialog" aria-modal="true">
+      <div class="modal sheet large">
+        <div class="panel-head">
+          <h2 data-i18n="detailTitle"></h2>
+          <button type="button" class="icon-btn" id="detail-close">✕</button>
+        </div>
+        <div class="detail-preview" id="detail-preview"></div>
+        <label class="field-label" data-i18n="fieldName"></label>
+        <input type="text" id="detail-name" class="field-input" />
+        <label class="field-label" data-i18n="fieldCategory"></label>
+        <select id="detail-category" class="field-input"></select>
+        <label class="field-label" data-i18n="fieldTags"></label>
+        <input
+          type="text"
+          id="detail-tags"
+          class="field-input"
+          data-i18n-placeholder="tagsComma"
+          placeholder=""
+        />
+        <label class="field-label" data-i18n="fieldDescription"></label>
+        <textarea id="detail-notes" class="field-input area" rows="3"></textarea>
+        <div class="detail-actions">
+          <button type="button" class="btn-primary" id="detail-save" data-i18n="saveChanges"></button>
+          <button type="button" class="btn-soft" id="detail-download" data-i18n="download"></button>
+          <button type="button" class="btn-soft" id="detail-share" data-i18n="share"></button>
+          <button type="button" class="btn-soft" id="detail-share-telegram" data-i18n="shareTelegram"></button>
+          <button type="button" class="btn-danger outline" id="detail-delete" data-i18n="deleteDoc"></button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="move-modal">
+      <div class="modal sheet small">
+        <h3 data-i18n="moveModalTitle"></h3>
+        <select id="move-target" class="field-input"></select>
+        <div class="detail-actions">
+          <button type="button" class="btn-primary" id="move-confirm" data-i18n="moveConfirm"></button>
+          <button type="button" class="btn-link" id="move-cancel" data-i18n="cancel"></button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast hidden" role="status"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

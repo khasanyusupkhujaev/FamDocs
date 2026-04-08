@@ -1,0 +1,15 @@
+aiogram==3.15.0
+aiofiles==24.1.0
+python-dotenv==1.0.1
+aiosqlite==0.20.0
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-multipart==0.0.17
+boto3>=1.35.0
+cryptography>=43.0.0
+pymupdf>=1.24.0
+Pillow>=10.0.0
+paytechuz==0.3.51
+sqlalchemy>=2.0,<3
+requests>=2.28
+environs>=11.0

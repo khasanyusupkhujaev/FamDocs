@@ -1,0 +1,18 @@
+# FamDoc on any VPS (Oracle Free Tier, Hetzner, etc.)
+# Copy .env to the server (never commit it). SQLite + local file cache live under ./data.
+services:
+  famdoc:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    env_file: .env
+    environment:
+      WEBAPP_HOST: "0.0.0.0"
+      WEBAPP_PORT: "8080"
+      FAMDOC_DATA_DIR: /data
+    volumes:
+      - famdoc_data:/data
+
+volumes:
+  famdoc_data:

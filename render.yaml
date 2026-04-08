@@ -1,0 +1,24 @@
+# Blueprint: https://render.com/docs/infrastructure-as-code
+#
+# FamDoc needs (1) no spin-down for Telegram polling and (2) persistent disk for SQLite.
+# Render's free web tier spins down after idle time and cannot attach a disk — use at least
+# `starter` and the disk below for production. See DEPLOY.md § Render.
+services:
+  - type: web
+    name: famdoc
+    runtime: docker
+    plan: starter
+    region: oregon
+    healthCheckPath: /
+    numInstances: 1
+    disk:
+      name: famdoc-data
+      mountPath: /data
+      sizeGB: 5
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: WEBAPP_PUBLIC_URL
+        sync: false
+      # Add the rest in the Render dashboard (Environment) from your .env, e.g.:
+      # FAMDOC_STORAGE, FAMDOC_S3_*, PAYTECH_LICENSE_API_KEY, FAMDOC_FILE_MASTER_KEY, ...
