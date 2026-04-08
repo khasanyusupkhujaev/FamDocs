@@ -65,6 +65,10 @@
     billingUpgrade: false,
     billingPriceLabel: "",
     billingSlotsPerPurchase: 0,
+    billingMode: "telegram",
+    telegramUserId: 0,
+    billingManual: null,
+    manualSelectedTier: null,
   };
 
   function pack() {
@@ -131,6 +135,23 @@
       renderSidebar();
       fillCategorySelects();
       updateBulkBar();
+      if (
+        state.billingMode === "manual" &&
+        $("#billing-step-pick") &&
+        !$("#billing-step-pick").classList.contains("hidden")
+      ) {
+        renderManualTierButtons();
+      }
+      if (state.manualSelectedTier) {
+        const t = state.manualSelectedTier;
+        const payLead = $("#billing-pay-lead");
+        if (payLead) {
+          payLead.textContent = tfmt("billingManualPayLead", {
+            amount: formatUzs(t.price_uzs),
+            slots: t.slots,
+          });
+        }
+      }
     };
   }
 
@@ -461,6 +482,84 @@
     btn.setAttribute("aria-disabled", at && !canPurchase ? "true" : "false");
   }
 
+  function formatUzs(n) {
+    try {
+      return new Intl.NumberFormat("en-US").format(Number(n)) + " UZS";
+    } catch {
+      return String(n) + " UZS";
+    }
+  }
+
+  function renderManualTierButtons() {
+    const wrap = $("#billing-tier-buttons");
+    if (!wrap) return;
+    wrap.innerHTML = "";
+    const tiers = (state.billingManual && state.billingManual.tiers) || [];
+    tiers.forEach((tier) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "tier-pick-btn";
+      btn.textContent = tfmt("billingTierButton", {
+        price: formatUzs(tier.price_uzs),
+        slots: tier.slots,
+      });
+      btn.addEventListener("click", () => showManualPayStep(tier));
+      wrap.appendChild(btn);
+    });
+  }
+
+  function showManualPickStep() {
+    state.manualSelectedTier = null;
+    $("#billing-step-pick")?.classList.remove("hidden");
+    $("#billing-step-pay")?.classList.add("hidden");
+    const qr = $("#billing-qr-img");
+    if (qr) {
+      qr.removeAttribute("src");
+    }
+    renderManualTierButtons();
+  }
+
+  function showManualPayStep(tier) {
+    state.manualSelectedTier = tier;
+    $("#billing-step-pick")?.classList.add("hidden");
+    $("#billing-step-pay")?.classList.remove("hidden");
+    const m = state.billingManual || {};
+    const cardEl = $("#billing-card-display");
+    const refEl = $("#billing-payment-ref");
+    const payLead = $("#billing-pay-lead");
+    const instrEl = $("#billing-transfer-instructions");
+    if (cardEl) cardEl.value = m.card || "";
+    const uid = state.telegramUserId || 0;
+    if (refEl) refEl.value = uid ? `FAMDOC-${uid}` : "";
+    if (payLead) {
+      payLead.textContent = tfmt("billingManualPayLead", {
+        amount: formatUzs(tier.price_uzs),
+        slots: tier.slots,
+      });
+    }
+    if (instrEl) {
+      const ins = (m.instructions || "").trim();
+      if (ins) {
+        instrEl.textContent = ins;
+        instrEl.hidden = false;
+      } else {
+        instrEl.textContent = "";
+        instrEl.hidden = true;
+      }
+    }
+    syncInitData();
+    const qr = $("#billing-qr-img");
+    if (qr && initData) {
+      qr.src = `/api/billing/payment-qr?amount_uzs=${encodeURIComponent(
+        String(tier.price_uzs),
+      )}&tgWebAppData=${encodeURIComponent(initData)}`;
+    }
+  }
+
+  function fillManualBilling() {
+    showManualPickStep();
+  }
+
   function updateBillingPanelCopy() {
     const lead = $("#billing-limit-lead");
     const hint = $("#billing-limit-hint");
@@ -492,6 +591,9 @@
     state.billingUpgrade = !!b.upgrade_enabled;
     state.billingPriceLabel = b.price_label || "";
     state.billingSlotsPerPurchase = b.slots_per_purchase || 0;
+    state.billingMode = b.mode || "telegram";
+    state.telegramUserId = data.telegram_user_id || 0;
+    state.billingManual = b.manual || null;
     state.contextMode = data.context_mode || "private";
     const hideFam = state.contextMode !== "private";
     $("#btn-family-sidebar")?.classList.toggle("hidden", hideFam);
@@ -577,7 +679,17 @@
       normal?.classList.add("hidden");
       lim?.classList.remove("hidden");
       runBtn?.classList.add("hidden");
-      updateBillingPanelCopy();
+      const inv = $("#billing-invoice-flow");
+      const man = $("#billing-manual-flow");
+      if (state.billingMode === "manual") {
+        inv?.classList.add("hidden");
+        man?.classList.remove("hidden");
+        fillManualBilling();
+      } else {
+        man?.classList.add("hidden");
+        inv?.classList.remove("hidden");
+        updateBillingPanelCopy();
+      }
     } else {
       if (titleEl) titleEl.textContent = t("uploadTitle");
       normal?.classList.remove("hidden");
@@ -607,6 +719,11 @@
     if (titleEl) titleEl.textContent = t("uploadTitle");
     $("#upload-normal-fields")?.classList.remove("hidden");
     $("#upload-limit-block")?.classList.add("hidden");
+    $("#billing-invoice-flow")?.classList.add("hidden");
+    $("#billing-manual-flow")?.classList.add("hidden");
+    $("#billing-step-pay")?.classList.add("hidden");
+    $("#billing-step-pick")?.classList.remove("hidden");
+    $("#billing-qr-img")?.removeAttribute("src");
     $("#btn-upload-run")?.classList.remove("hidden");
   }
 
@@ -973,6 +1090,7 @@
 
   $("#btn-buy-slots")?.addEventListener("click", async () => {
     if (!initData) return;
+    if (state.billingMode === "manual") return;
     const r = await postJson("/api/billing/invoice", {});
     if (!r.ok) {
       showToast(t("billingInvoiceFail"));
@@ -1205,6 +1323,36 @@
     } catch {
       showToast(t("toastCopyFail"));
     }
+  });
+
+  $("#btn-copy-card")?.addEventListener("click", async () => {
+    const v = $("#billing-card-display")?.value;
+    if (!v) return;
+    try {
+      await navigator.clipboard.writeText(v);
+      showToast(t("toastCopied"));
+    } catch {
+      showToast(t("toastCopyFail"));
+    }
+  });
+
+  $("#btn-copy-ref")?.addEventListener("click", async () => {
+    const v = $("#billing-payment-ref")?.value;
+    if (!v) return;
+    try {
+      await navigator.clipboard.writeText(v);
+      showToast(t("toastCopied"));
+    } catch {
+      showToast(t("toastCopyFail"));
+    }
+  });
+
+  $("#billing-change-plan")?.addEventListener("click", () => {
+    showManualPickStep();
+  });
+
+  $("#btn-billing-i-paid")?.addEventListener("click", () => {
+    showToast(t("billingWaitAdminConfirm"));
   });
 
   boot();

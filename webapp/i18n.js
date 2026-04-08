@@ -96,6 +96,25 @@ window.FamDocI18n = {
     billingCancelled: "Payment cancelled.",
     billingPaytechHint:
       "Complete payment in Payme/Click, then return here and tap + again to refresh your limit.",
+    billingManualIntro:
+      "You've reached your document limit. Pick a plan, then pay that exact amount to the card. Put your code in the transfer comment — or scan the QR.",
+    billingChoosePlan: "Choose your plan",
+    billingChangePlan: "← Change plan",
+    billingTierButton: "{price} · +{slots} documents / month",
+    billingManualPayLead:
+      "Pay {amount} for +{slots} documents. Copy the card and comment below, or scan the QR.",
+    billingManualCardLabel: "Card number",
+    billingManualCopyCard: "Copy card",
+    billingManualCommentLabel: "Your payment comment (copy exactly)",
+    billingManualCommentHint:
+      "Use Comment, Purpose, Payment details, or Note — paste this code so we can match your payment.",
+    billingManualCopyComment: "Copy code",
+    billingQrLabel: "QR code (same details)",
+    billingIPaid: "I paid",
+    billingWaitAdminConfirm:
+      "Please wait until an administrator confirms your payment. This may take a few minutes. Thank you for your patience.",
+    billingManualAfterPay:
+      "After confirmation, your upload limit will increase. Usually within one business day.",
     toastStorageDenied:
       "Storage denied the upload. Check that your R2/S3 API token can write to this bucket.",
     confirmDeleteOne: "Delete this document permanently?",
@@ -238,6 +257,25 @@ window.FamDocI18n = {
     billingCancelled: "To‘lov bekor qilindi.",
     billingPaytechHint:
       "To‘lovni yakunlang, keyin limit yangilanshini tekshirish uchun + tugmasini bosing.",
+    billingManualIntro:
+      "Limit tugadi. Tarifni tanlang, keyin aynan shu summani kartaga o‘tkazing. Izohga kodingizni yozing yoki QR skanerlang.",
+    billingChoosePlan: "Tarifni tanlang",
+    billingChangePlan: "← Tarifni o‘zgartirish",
+    billingTierButton: "{price} · oyiga +{slots} ta hujjat",
+    billingManualPayLead:
+      "{amount} to‘lang — +{slots} ta hujjat. Kartani va izohni nusxalang yoki QR skanerlang.",
+    billingManualCardLabel: "Karta raqami",
+    billingManualCopyCard: "Kartani nusxalash",
+    billingManualCommentLabel: "To‘lov izohi (to‘liq nusxa)",
+    billingManualCommentHint:
+      "«Izoh» / «Maqsad» maydoniga shu kodni yopishtiring.",
+    billingManualCopyComment: "Kodni nusxalash",
+    billingQrLabel: "QR-kod (xuddi shu ma’lumot)",
+    billingIPaid: "To‘ladim",
+    billingWaitAdminConfirm:
+      "To‘lov admin tomonidan tasdiqlanguncha kuting. Bir necha daqiqa davom etishi mumkin. Tushunganingiz uchun rahmat.",
+    billingManualAfterPay:
+      "Tasdiqlangach, limit oshadi. Odatda 1 ish kuni ichida.",
     toastStorageDenied:
       "Saqlash rad etildi. R2/S3 API token ushbu bucketga yozish huquqiga ega ekanini tekshiring.",
     confirmDeleteOne: "Bu hujjatni butunlay o‘chirasizmi?",
@@ -380,6 +418,25 @@ window.FamDocI18n = {
     billingCancelled: "Оплата отменена.",
     billingPaytechHint:
       "Завершите оплату в Payme/Click, вернитесь и нажмите +, чтобы обновить лимит.",
+    billingManualIntro:
+      "Лимит документов исчерпан. Выберите тариф, переведите ровно эту сумму на карту. Укажите код в комментарии или отсканируйте QR.",
+    billingChoosePlan: "Выберите тариф",
+    billingChangePlan: "← Другой тариф",
+    billingTierButton: "{price} · +{slots} док. в месяц",
+    billingManualPayLead:
+      "Оплатите {amount} за +{slots} документов. Скопируйте карту и комментарий или отсканируйте QR.",
+    billingManualCardLabel: "Номер карты",
+    billingManualCopyCard: "Копировать карту",
+    billingManualCommentLabel: "Комментарий к переводу (скопируйте целиком)",
+    billingManualCommentHint:
+      "Поле «Назначение платежа» / «Комментарий» — вставьте этот код.",
+    billingManualCopyComment: "Копировать код",
+    billingQrLabel: "QR-код (те же данные)",
+    billingIPaid: "Я оплатил(а)",
+    billingWaitAdminConfirm:
+      "Дождитесь подтверждения оплаты администратором. Это может занять несколько минут. Спасибо за понимание.",
+    billingManualAfterPay:
+      "После подтверждения лимит увеличится. Обычно в течение рабочего дня.",
     toastStorageDenied:
       "Хранилище отклонило загрузку. Проверьте, что API-токен R2/S3 может записывать в этот bucket.",
     confirmDeleteOne: "Удалить этот документ навсегда?",

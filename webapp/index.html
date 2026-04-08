@@ -173,9 +173,40 @@
           <button type="button" class="icon-btn" id="upload-close">✕</button>
         </div>
         <div id="upload-limit-block" class="billing-block hidden">
-          <p class="billing-lead" id="billing-limit-lead"></p>
-          <p class="field-hint" id="billing-limit-hint"></p>
-          <button type="button" class="btn-primary wide" id="btn-buy-slots"></button>
+          <div id="billing-invoice-flow" class="hidden">
+            <p class="billing-lead" id="billing-limit-lead"></p>
+            <p class="field-hint" id="billing-limit-hint"></p>
+            <button type="button" class="btn-primary wide" id="btn-buy-slots"></button>
+          </div>
+          <div id="billing-manual-flow" class="hidden billing-manual-flow">
+            <div id="billing-step-pick">
+              <p class="billing-lead" id="billing-manual-intro" data-i18n="billingManualIntro"></p>
+              <p class="field-label" data-i18n="billingChoosePlan"></p>
+              <div id="billing-tier-buttons" class="tier-btn-row"></div>
+            </div>
+            <div id="billing-step-pay" class="hidden">
+              <button type="button" class="btn-link billing-back" id="billing-change-plan" data-i18n="billingChangePlan"></button>
+              <p class="billing-lead" id="billing-pay-lead"></p>
+              <p class="field-hint" id="billing-transfer-instructions" hidden></p>
+              <label class="field-label" data-i18n="billingManualCardLabel"></label>
+              <div class="invite-link-row">
+                <input type="text" readonly id="billing-card-display" class="field-input" />
+                <button type="button" class="btn-soft" id="btn-copy-card" data-i18n="billingManualCopyCard"></button>
+              </div>
+              <label class="field-label" data-i18n="billingManualCommentLabel"></label>
+              <p class="field-hint" data-i18n="billingManualCommentHint"></p>
+              <div class="invite-link-row">
+                <input type="text" readonly id="billing-payment-ref" class="field-input mono" />
+                <button type="button" class="btn-soft" id="btn-copy-ref" data-i18n="billingManualCopyComment"></button>
+              </div>
+              <p class="field-label" data-i18n="billingQrLabel"></p>
+              <div class="billing-qr-wrap">
+                <img id="billing-qr-img" alt="" width="200" height="200" decoding="async" />
+              </div>
+              <button type="button" class="btn-primary wide" id="btn-billing-i-paid" data-i18n="billingIPaid"></button>
+              <p class="field-hint billing-foot" data-i18n="billingManualAfterPay"></p>
+            </div>
+          </div>
         </div>
         <div id="upload-normal-fields">
         <label class="field-label"><span data-i18n="category"></span></label>

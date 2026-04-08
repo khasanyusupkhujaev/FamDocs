@@ -126,9 +126,60 @@ UPGRADE_INVOICE_DESCRIPTION = (
     or "Extra document slots"
 ).strip()[:255]
 
-# Billing: telegram (Stars / BotFather provider) | payme | click (PayTech.uz gateways, same SQLite DB).
+# Billing: telegram (Stars / provider) | payme | click (PayTech) | manual (bank card + admin grants).
 _billing_mode = (os.getenv("FAMDOC_BILLING_MODE", "telegram") or "telegram").strip().lower()
-BILLING_MODE = _billing_mode if _billing_mode in ("telegram", "payme", "click") else "telegram"
+BILLING_MODE = (
+    _billing_mode
+    if _billing_mode in ("telegram", "payme", "click", "manual")
+    else "telegram"
+)
+
+
+def _parse_admin_ids(raw: str) -> frozenset[int]:
+    ids: list[int] = []
+    for part in (raw or "").replace(" ", "").split(","):
+        if part.isdigit() and int(part) > 0:
+            ids.append(int(part))
+    return frozenset(ids)
+
+
+# Comma-separated Telegram user ids who may use /stats, /grant, /admin.
+ADMIN_TELEGRAM_IDS: frozenset[int] = _parse_admin_ids(
+    os.getenv("FAMDOC_ADMIN_TELEGRAM_IDS", "")
+)
+# Comma-separated @usernames (without @) — resolved to numeric ids at bot startup.
+ADMIN_USERNAMES: tuple[str, ...] = tuple(
+    p.strip().lstrip("@")
+    for p in (os.getenv("FAMDOC_ADMIN_USERNAMES", "") or "").split(",")
+    if p.strip()
+)
+# Optional: ?token=... for GET /admin/stats (set a long random string).
+ADMIN_WEB_TOKEN = os.getenv("FAMDOC_ADMIN_WEB_TOKEN", "").strip()
+
+# Manual transfer: show card number (spaces ok) and optional bank name line.
+TRANSFER_CARD_DISPLAY = os.getenv("FAMDOC_TRANSFER_CARD", "").strip()
+TRANSFER_INSTRUCTIONS = (os.getenv("FAMDOC_TRANSFER_INSTRUCTIONS", "") or "").strip()
+
+# Monthly tiers (UZS): price → extra document slots per month (admin grants after payment).
+MANUAL_TIER_1_UZS = int(os.getenv("FAMDOC_TIER1_UZS", "10000"))
+MANUAL_TIER_1_SLOTS = int(os.getenv("FAMDOC_TIER1_SLOTS", "10"))
+MANUAL_TIER_2_UZS = int(os.getenv("FAMDOC_TIER2_UZS", "25000"))
+MANUAL_TIER_2_SLOTS = int(os.getenv("FAMDOC_TIER2_SLOTS", "20"))
+MANUAL_TIER_3_UZS = int(os.getenv("FAMDOC_TIER3_UZS", "50000"))
+MANUAL_TIER_3_SLOTS = int(os.getenv("FAMDOC_TIER3_SLOTS", "40"))
+
+
+def manual_billing_tiers() -> list[dict[str, int | str]]:
+    """Three subscription tiers for FAMDOC_BILLING_MODE=manual (UZS / month)."""
+    return [
+        {"id": "tier1", "price_uzs": MANUAL_TIER_1_UZS, "slots": MANUAL_TIER_1_SLOTS},
+        {"id": "tier2", "price_uzs": MANUAL_TIER_2_UZS, "slots": MANUAL_TIER_2_SLOTS},
+        {"id": "tier3", "price_uzs": MANUAL_TIER_3_UZS, "slots": MANUAL_TIER_3_SLOTS},
+    ]
+
+
+def manual_tier_allowed_amounts() -> frozenset[int]:
+    return frozenset(int(t["price_uzs"]) for t in manual_billing_tiers())
 
 # PayTech.uz license (https://pay-tech.uz/console) — required by paytechuz when creating Payme/Click links.
 # Loaded via dotenv above; paytechuz reads PAYTECH_LICENSE_API_KEY from the environment.

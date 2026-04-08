@@ -20,6 +20,7 @@ from bot.config import (
 from bot.branding import load_branding_assets
 from bot.db import init_db
 from bot.handlers import setup_routers
+from bot.handlers.admin import resolve_admin_users
 from bot.webapp_server import create_webapp_app
 
 
@@ -42,6 +43,8 @@ async def main() -> None:
         token=BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    await resolve_admin_users(bot)
+
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(setup_routers())
 

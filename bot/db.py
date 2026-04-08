@@ -345,6 +345,49 @@ async def grant_extra_slots_for_payment(
         return True
 
 
+async def add_extra_slots(vault_id: int, slots: int) -> None:
+    """Increase purchased extra slots (admin grant or external reconciliation)."""
+    if slots <= 0:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO vault_entitlements (vault_id, extra_slots, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(vault_id) DO UPDATE SET
+                extra_slots = vault_entitlements.extra_slots + excluded.extra_slots,
+                updated_at = excluded.updated_at
+            """,
+            (vault_id, slots, now),
+        )
+        await db.commit()
+
+
+async def admin_statistics() -> dict[str, int]:
+    """Dashboard counts: registered users, uploads activity, totals."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT COUNT(*) FROM vault_members")
+        row = await cur.fetchone()
+        users_registered = int(row[0]) if row else 0
+
+        cur = await db.execute("SELECT COUNT(*) FROM documents")
+        row = await cur.fetchone()
+        total_documents = int(row[0]) if row else 0
+
+        cur = await db.execute(
+            "SELECT COUNT(DISTINCT family_chat_id) FROM documents"
+        )
+        row = await cur.fetchone()
+        vaults_with_uploads = int(row[0]) if row else 0
+
+    return {
+        "users_registered": users_registered,
+        "vaults_with_uploads": vaults_with_uploads,
+        "total_documents": total_documents,
+    }
+
+
 async def update_document(
     family_chat_id: int,
     doc_id: int,

@@ -33,6 +33,7 @@ from bot.billing import (
 from bot.invite_parse import extract_join_token
 from bot import paytech_integration
 from bot.config import (
+    ADMIN_WEB_TOKEN,
     BASE_DIR,
     BILLING_MODE,
     BOT_TOKEN,
@@ -44,8 +45,13 @@ from bot.config import (
     LOGO_TRANSPARENT_PATH,
     PAYME_MERCHANT_ID,
     PAYME_MERCHANT_KEY,
+    TRANSFER_CARD_DISPLAY,
+    TRANSFER_INSTRUCTIONS,
     WEBAPP_PUBLIC_URL,
+    manual_billing_tiers,
+    manual_tier_allowed_amounts,
 )
+from bot.payment_qr import build_payment_qr_png
 from bot.keyboards import CATEGORY_EMOJI, CATEGORY_LABELS, CATEGORY_ORDER
 from bot.preview import build_preview_jpeg
 from bot.storage import (
@@ -234,6 +240,20 @@ def create_webapp_app() -> FastAPI:
 
     Init = Depends(init_context_dep)
 
+    async def init_context_flexible(
+        tgWebAppData: str | None = Query(None),
+        x_telegram_init_data: str | None = Header(None, alias="X-Telegram-Init-Data"),
+    ) -> InitContext:
+        raw = (x_telegram_init_data or "").strip() or (tgWebAppData or "").strip()
+        if not raw:
+            raise HTTPException(
+                status_code=401,
+                detail="Missing Telegram auth (header or tgWebAppData)",
+            )
+        return await _init_context_from_raw(raw)
+
+    InitFlex = Depends(init_context_flexible)
+
     async def _remove_doc_blobs(vault_id: int, meta: dict) -> None:
         await remove_stored_file(vault_id, meta["stored_filename"])
         prev = (meta.get("preview_stored_filename") or "").strip()
@@ -265,14 +285,44 @@ def create_webapp_app() -> FastAPI:
         extra = await db.get_purchased_extra_slots(ctx.vault_id)
         cap = await effective_document_cap(ctx.vault_id)
         doc_limit = cap if cap is not None else 0
-        if BILLING_MODE in ("payme", "click"):
+        paytech_ok = paytech_configured()
+        if BILLING_MODE == "manual":
+            manual_ok = bool(TRANSFER_CARD_DISPLAY.strip())
+            billing_out = {
+                "upgrade_enabled": FREE_DOCUMENT_LIMIT > 0 and manual_ok,
+                "slots_per_purchase": UPGRADE_EXTRA_SLOTS,
+                "price_label": "",
+                "uses_stars": False,
+                "mode": "manual",
+                "paytech_ready": False,
+                "manual": {
+                    "card": TRANSFER_CARD_DISPLAY,
+                    "instructions": TRANSFER_INSTRUCTIONS,
+                    "tiers": manual_billing_tiers(),
+                    "currency": "UZS",
+                },
+            }
+        elif BILLING_MODE in ("payme", "click"):
             pl = format_paytech_price_label()
-            uses_stars = False
-            paytech_ok = paytech_configured()
+            billing_out = {
+                "upgrade_enabled": FREE_DOCUMENT_LIMIT > 0 and paytech_ok,
+                "slots_per_purchase": UPGRADE_EXTRA_SLOTS,
+                "price_label": pl,
+                "uses_stars": False,
+                "mode": BILLING_MODE,
+                "paytech_ready": paytech_ok,
+            }
         else:
             pl = upgrade_price_label()
-            uses_stars = billing_uses_stars()
-            paytech_ok = True
+            billing_out = {
+                "upgrade_enabled": FREE_DOCUMENT_LIMIT > 0
+                and (BILLING_MODE == "telegram" or paytech_ok),
+                "slots_per_purchase": UPGRADE_EXTRA_SLOTS,
+                "price_label": pl,
+                "uses_stars": billing_uses_stars(),
+                "mode": BILLING_MODE,
+                "paytech_ready": paytech_ok,
+            }
         return {
             "categories": cats,
             "total": total,
@@ -280,15 +330,8 @@ def create_webapp_app() -> FastAPI:
             "document_limit": doc_limit,
             "free_document_limit": FREE_DOCUMENT_LIMIT,
             "purchased_extra_slots": extra,
-            "billing": {
-                "upgrade_enabled": FREE_DOCUMENT_LIMIT > 0
-                and (BILLING_MODE == "telegram" or paytech_ok),
-                "slots_per_purchase": UPGRADE_EXTRA_SLOTS,
-                "price_label": pl,
-                "uses_stars": uses_stars,
-                "mode": BILLING_MODE,
-                "paytech_ready": paytech_ok,
-            },
+            "telegram_user_id": ctx.user_id,
+            "billing": billing_out,
         }
 
     @app.get("/api/documents")
@@ -607,10 +650,40 @@ def create_webapp_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=reason)
         return {"ok": True, "reason": reason}
 
+    @app.get("/api/billing/payment-qr")
+    async def api_payment_qr(
+        amount_uzs: int = Query(..., ge=1, le=50_000_000),
+        ctx: InitContext = InitFlex,
+    ):
+        if BILLING_MODE != "manual":
+            raise HTTPException(status_code=400, detail="not_manual_billing")
+        if not TRANSFER_CARD_DISPLAY.strip():
+            raise HTTPException(status_code=503, detail="card_not_configured")
+        allowed = manual_tier_allowed_amounts()
+        if amount_uzs not in allowed:
+            raise HTTPException(status_code=400, detail="invalid_amount")
+        comment = f"FAMDOC-{ctx.user_id}"
+        png = build_payment_qr_png(
+            card=TRANSFER_CARD_DISPLAY,
+            amount_uzs=amount_uzs,
+            comment=comment,
+        )
+        return Response(content=png, media_type="image/png")
+
+    @app.get("/admin/stats")
+    async def admin_stats_http(token: str = Query("")):
+        if not ADMIN_WEB_TOKEN or token != ADMIN_WEB_TOKEN:
+            raise HTTPException(status_code=401, detail="unauthorized")
+        return await db.admin_statistics()
+
     @app.post("/api/billing/invoice")
     async def api_billing_invoice(ctx: InitContext = Init):
         if FREE_DOCUMENT_LIMIT <= 0:
             raise HTTPException(status_code=400, detail="billing_disabled")
+        if BILLING_MODE == "manual":
+            raise HTTPException(
+                status_code=400, detail="billing_manual_transfer"
+            )
         if BILLING_MODE in ("payme", "click"):
             if not paytech_configured():
                 raise HTTPException(
