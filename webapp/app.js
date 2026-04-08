@@ -243,6 +243,12 @@
     return r.json();
   }
 
+  async function apiAdminManualClaims() {
+    const r = await fetch("/api/admin/manual-claims", { headers: headers() });
+    if (!r.ok) throw new Error("admin_claims");
+    return r.json();
+  }
+
   async function apiDocuments() {
     const p = new URLSearchParams();
     if (state.activeCategory && state.activeCategory !== "all") {
@@ -1222,20 +1228,69 @@
       .join("");
   }
 
+  function renderAdminClaims(d) {
+    const wrap = $("#admin-claims-body");
+    if (!wrap) return;
+    const items = d.items || [];
+    if (!items.length) {
+      wrap.innerHTML = `<p class="admin-claims-empty">${escapeHtml(t("adminClaimsEmpty"))}</p>`;
+      return;
+    }
+    wrap.innerHTML = items
+      .map((m) => {
+        const uid = escapeHtml(String(m.user_id ?? ""));
+        const disp =
+          (m.display_name || "").trim() ||
+          [m.first_name, m.last_name].filter(Boolean).join(" ").trim();
+        const nameShown = disp
+          ? escapeHtml(disp)
+          : escapeHtml(t("adminNoDisplayName"));
+        const uname = m.username
+          ? "@" + escapeHtml(m.username)
+          : escapeHtml(t("adminNoUsername"));
+        const tier = escapeHtml(
+          tfmt("adminClaimTierLine", {
+            price: formatUzs(m.price_uzs),
+            slots: m.slots_requested,
+          }),
+        );
+        const when = escapeHtml(formatDate(m.claimed_at));
+        return `<article class="admin-claim-card" aria-label="${uid}">
+          <div class="admin-claim-grid">
+            <div><span class="admin-claim-k">${escapeHtml(t("adminClaimColId"))}</span><span class="admin-claim-v mono">${uid}</span></div>
+            <div><span class="admin-claim-k">${escapeHtml(t("adminClaimColName"))}</span><span class="admin-claim-v">${nameShown}</span></div>
+            <div><span class="admin-claim-k">${escapeHtml(t("adminClaimColUser"))}</span><span class="admin-claim-v">${uname}</span></div>
+            <div><span class="admin-claim-k">${escapeHtml(t("adminClaimColPlan"))}</span><span class="admin-claim-v">${tier}</span></div>
+            <div><span class="admin-claim-k">${escapeHtml(t("adminClaimColTime"))}</span><span class="admin-claim-v">${when}</span></div>
+          </div>
+        </article>`;
+      })
+      .join("");
+  }
+
   async function openAdminModal() {
     applyStaticI18n();
     const wrap = $("#admin-stats-body");
+    const claimsWrap = $("#admin-claims-body");
     if (wrap)
       wrap.innerHTML = `<p class="admin-loading">${escapeHtml(t("adminStatsLoading"))}</p>`;
+    if (claimsWrap)
+      claimsWrap.innerHTML = `<p class="admin-loading">${escapeHtml(t("adminClaimsLoading"))}</p>`;
     const fbEl = $("#admin-grant-feedback");
     if (fbEl) fbEl.hidden = true;
     $("#admin-modal")?.classList.remove("hidden");
     try {
-      const s = await apiAdminStats();
+      const [s, c] = await Promise.all([
+        apiAdminStats(),
+        apiAdminManualClaims(),
+      ]);
       renderAdminStats(s);
+      renderAdminClaims(c);
     } catch {
       if (wrap)
         wrap.innerHTML = `<p class="admin-error">${escapeHtml(t("adminStatsFail"))}</p>`;
+      if (claimsWrap)
+        claimsWrap.innerHTML = `<p class="admin-error">${escapeHtml(t("adminClaimsFail"))}</p>`;
       showToast(t("toastConnection"));
     }
   }
@@ -1340,7 +1395,12 @@
     }
     showToast(okMsg);
     try {
-      renderAdminStats(await apiAdminStats());
+      const [s, c] = await Promise.all([
+        apiAdminStats(),
+        apiAdminManualClaims(),
+      ]);
+      renderAdminStats(s);
+      renderAdminClaims(c);
     } catch (_) {}
   });
 
@@ -1454,8 +1514,27 @@
     showManualPickStep();
   });
 
-  $("#btn-billing-i-paid")?.addEventListener("click", () => {
-    showToast(t("billingWaitAdminConfirm"));
+  $("#btn-billing-i-paid")?.addEventListener("click", async () => {
+    const tier = state.manualSelectedTier;
+    if (!tier || state.billingMode !== "manual") {
+      showToast(t("billingWaitAdminConfirm"));
+      return;
+    }
+    const r = await postJson("/api/billing/manual-claim", {
+      price_uzs: tier.price_uzs,
+      slots: tier.slots,
+    });
+    if (!r.ok) {
+      let msg = t("toastConnection");
+      try {
+        const err = await r.json();
+        const d = err.detail;
+        if (d === "invalid_tier") msg = t("billingClaimInvalidTier");
+      } catch (_) {}
+      showToast(msg);
+      return;
+    }
+    showToast(t("billingClaimRecorded"));
   });
 
   boot();

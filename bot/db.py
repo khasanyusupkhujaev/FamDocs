@@ -122,6 +122,19 @@ async def _migrate_schema(db: aiosqlite.Connection) -> None:
         )
         """
     )
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS manual_payment_claims (
+            user_id INTEGER PRIMARY KEY NOT NULL,
+            first_name TEXT NOT NULL DEFAULT '',
+            last_name TEXT NOT NULL DEFAULT '',
+            username TEXT,
+            price_uzs INTEGER NOT NULL,
+            slots_requested INTEGER NOT NULL,
+            claimed_at TEXT NOT NULL
+        )
+        """
+    )
 
 
 async def init_db() -> None:
@@ -360,6 +373,67 @@ async def add_extra_slots(vault_id: int, slots: int) -> None:
                 updated_at = excluded.updated_at
             """,
             (vault_id, slots, now),
+        )
+        await db.commit()
+
+
+async def upsert_manual_payment_claim(
+    user_id: int,
+    *,
+    first_name: str,
+    last_name: str,
+    username: str | None,
+    price_uzs: int,
+    slots_requested: int,
+) -> None:
+    """User tapped «I paid» for manual bank transfer; upsert pending row for admin."""
+    now = datetime.now(timezone.utc).isoformat()
+    fn = (first_name or "").strip()
+    ln = (last_name or "").strip()
+    un = (username or "").strip() or None
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO manual_payment_claims
+            (user_id, first_name, last_name, username, price_uzs, slots_requested, claimed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                first_name = excluded.first_name,
+                last_name = excluded.last_name,
+                username = excluded.username,
+                price_uzs = excluded.price_uzs,
+                slots_requested = excluded.slots_requested,
+                claimed_at = excluded.claimed_at
+            """,
+            (user_id, fn, ln, un, price_uzs, slots_requested, now),
+        )
+        await db.commit()
+
+
+async def list_manual_payment_claims() -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """
+            SELECT user_id, first_name, last_name, username, price_uzs, slots_requested, claimed_at
+            FROM manual_payment_claims
+            ORDER BY claimed_at DESC
+            """
+        )
+        rows = await cur.fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        out.append(d)
+    return out
+
+
+async def delete_manual_payment_claim(telegram_user_id: int) -> None:
+    """Remove pending claim after admin grants slots (or reconciliation)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "DELETE FROM manual_payment_claims WHERE user_id = ?",
+            (telegram_user_id,),
         )
         await db.commit()
 

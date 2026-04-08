@@ -1074,3 +1074,48 @@ h3 {
   margin-top: 12px;
   color: var(--mint-deep);
 }
+
+.admin-claims-body {
+  font-size: 0.9rem;
+}
+
+.admin-claims-empty {
+  margin: 0;
+  color: var(--muted);
+}
+
+.admin-claim-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.admin-claim-card:last-child {
+  margin-bottom: 0;
+}
+
+.admin-claim-grid {
+  display: grid;
+  gap: 6px;
+}
+
+.admin-claim-k {
+  display: inline-block;
+  min-width: 6.5rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-right: 6px;
+  vertical-align: top;
+}
+
+.admin-claim-v {
+  display: inline;
+  word-break: break-word;
+}
+
+.mono {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.88em;
+}

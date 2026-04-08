@@ -109,12 +109,19 @@ class AdminGrantBody(BaseModel):
     slots: int = Field(..., ge=1, le=10_000)
 
 
+class ManualClaimBody(BaseModel):
+    price_uzs: int = Field(..., ge=1)
+    slots: int = Field(..., ge=1, le=10_000)
+
+
 @dataclass
 class InitContext:
     vault_id: int
     user_id: int
     mode: str  # "private" | "group"
     telegram_username: str | None = None
+    first_name: str = ""
+    last_name: str = ""
 
 
 def _download_file_response(data: bytes, media: str, fname: str) -> Response:
@@ -141,14 +148,25 @@ async def _init_context_from_raw(init_data: str) -> InitContext:
         uid = int(user["id"])
         raw_un = (user.get("username") or "").strip()
         telegram_username = raw_un if raw_un else None
+        first_name = (user.get("first_name") or "").strip()
+        last_name = (user.get("last_name") or "").strip()
         return InitContext(
             vault_id=vault_id,
             user_id=uid,
             mode=mode,
             telegram_username=telegram_username,
+            first_name=first_name,
+            last_name=last_name,
         )
     except ValueError:
         raise HTTPException(status_code=401, detail="Invalid init data") from None
+
+
+def _manual_tier_valid(price_uzs: int, slots: int) -> bool:
+    for t in manual_billing_tiers():
+        if int(t["price_uzs"]) == price_uzs and int(t["slots"]) == slots:
+            return True
+    return False
 
 
 def build_spa_html(webapp_dir: Path) -> str:
@@ -356,6 +374,31 @@ def create_webapp_app() -> FastAPI:
             raise HTTPException(status_code=403, detail="forbidden")
         return await db.admin_statistics()
 
+    @app.get("/api/admin/manual-claims")
+    async def api_admin_manual_claims(ctx: InitContext = Init):
+        if not is_miniapp_admin(ctx.user_id, ctx.telegram_username):
+            raise HTTPException(status_code=403, detail="forbidden")
+        rows = await db.list_manual_payment_claims()
+        items = []
+        for r in rows:
+            fn = (r.get("first_name") or "").strip()
+            ln = (r.get("last_name") or "").strip()
+            parts = [p for p in (fn, ln) if p]
+            display_name = " ".join(parts) if parts else ""
+            items.append(
+                {
+                    "user_id": r["user_id"],
+                    "first_name": fn,
+                    "last_name": ln,
+                    "display_name": display_name,
+                    "username": r.get("username"),
+                    "price_uzs": r["price_uzs"],
+                    "slots_requested": r["slots_requested"],
+                    "claimed_at": r["claimed_at"],
+                }
+            )
+        return {"items": items}
+
     @app.post("/api/admin/grant")
     async def api_admin_grant_miniapp(
         body: AdminGrantBody,
@@ -365,6 +408,7 @@ def create_webapp_app() -> FastAPI:
             raise HTTPException(status_code=403, detail="forbidden")
         vault_id = await db.get_vault_for_user(body.target_user_id)
         await db.add_extra_slots(vault_id, body.slots)
+        await db.delete_manual_payment_claim(body.target_user_id)
         extra = await db.get_purchased_extra_slots(vault_id)
         cap: int | None = None
         if FREE_DOCUMENT_LIMIT > 0:
@@ -713,6 +757,24 @@ def create_webapp_app() -> FastAPI:
             comment=comment,
         )
         return Response(content=png, media_type="image/png")
+
+    @app.post("/api/billing/manual-claim")
+    async def api_manual_claim(body: ManualClaimBody, ctx: InitContext = Init):
+        if BILLING_MODE != "manual":
+            raise HTTPException(status_code=400, detail="not_manual_billing")
+        if FREE_DOCUMENT_LIMIT <= 0:
+            raise HTTPException(status_code=400, detail="billing_disabled")
+        if not _manual_tier_valid(body.price_uzs, body.slots):
+            raise HTTPException(status_code=400, detail="invalid_tier")
+        await db.upsert_manual_payment_claim(
+            ctx.user_id,
+            first_name=ctx.first_name,
+            last_name=ctx.last_name,
+            username=ctx.telegram_username,
+            price_uzs=body.price_uzs,
+            slots_requested=body.slots,
+        )
+        return {"ok": True}
 
     @app.get("/admin/stats")
     async def admin_stats_http(token: str = Query("")):

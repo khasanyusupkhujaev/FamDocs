@@ -106,6 +106,7 @@ async def cmd_grant(message: Message) -> None:
         return
     vault_id = await db.get_vault_for_user(target_uid)
     await db.add_extra_slots(vault_id, slots)
+    await db.delete_manual_payment_claim(target_uid)
     extra = await db.get_purchased_extra_slots(vault_id)
     if FREE_DOCUMENT_LIMIT > 0:
         cap = FREE_DOCUMENT_LIMIT + extra
