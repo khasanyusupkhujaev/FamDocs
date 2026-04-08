@@ -153,6 +153,21 @@ ADMIN_USERNAMES: tuple[str, ...] = tuple(
     for p in (os.getenv("FAMDOC_ADMIN_USERNAMES", "") or "").split(",")
     if p.strip()
 )
+
+
+def is_miniapp_admin(telegram_user_id: int, telegram_username: str | None) -> bool:
+    """
+    True if this Telegram account may use Mini App admin UI and /api/admin/*.
+    Matches FAMDOC_ADMIN_TELEGRAM_IDS or FAMDOC_ADMIN_USERNAMES (case-insensitive).
+    If the user hides their username in Telegram, use numeric id in FAMDOC_ADMIN_TELEGRAM_IDS.
+    """
+    if telegram_user_id in ADMIN_TELEGRAM_IDS:
+        return True
+    un = (telegram_username or "").strip().lstrip("@").lower()
+    if not un:
+        return False
+    allowed = {a.strip().lstrip("@").lower() for a in ADMIN_USERNAMES if a.strip()}
+    return un in allowed
 # Optional: ?token=... for GET /admin/stats (set a long random string).
 ADMIN_WEB_TOKEN = os.getenv("FAMDOC_ADMIN_WEB_TOKEN", "").strip()
 

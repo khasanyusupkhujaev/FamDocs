@@ -48,6 +48,7 @@ from bot.config import (
     TRANSFER_CARD_DISPLAY,
     TRANSFER_INSTRUCTIONS,
     WEBAPP_PUBLIC_URL,
+    is_miniapp_admin,
     manual_billing_tiers,
     manual_tier_allowed_amounts,
 )
@@ -103,11 +104,17 @@ class InviteAcceptBody(BaseModel):
     invite: str = Field(..., min_length=1)
 
 
+class AdminGrantBody(BaseModel):
+    target_user_id: int = Field(..., ge=1)
+    slots: int = Field(..., ge=1, le=10_000)
+
+
 @dataclass
 class InitContext:
     vault_id: int
     user_id: int
     mode: str  # "private" | "group"
+    telegram_username: str | None = None
 
 
 def _download_file_response(data: bytes, media: str, fname: str) -> Response:
@@ -132,7 +139,14 @@ async def _init_context_from_raw(init_data: str) -> InitContext:
             raise ValueError("no user")
         user = json.loads(vals["user"])
         uid = int(user["id"])
-        return InitContext(vault_id=vault_id, user_id=uid, mode=mode)
+        raw_un = (user.get("username") or "").strip()
+        telegram_username = raw_un if raw_un else None
+        return InitContext(
+            vault_id=vault_id,
+            user_id=uid,
+            mode=mode,
+            telegram_username=telegram_username,
+        )
     except ValueError:
         raise HTTPException(status_code=401, detail="Invalid init data") from None
 
@@ -331,7 +345,37 @@ def create_webapp_app() -> FastAPI:
             "free_document_limit": FREE_DOCUMENT_LIMIT,
             "purchased_extra_slots": extra,
             "telegram_user_id": ctx.user_id,
+            "telegram_username": ctx.telegram_username,
+            "is_admin": is_miniapp_admin(ctx.user_id, ctx.telegram_username),
             "billing": billing_out,
+        }
+
+    @app.get("/api/admin/stats")
+    async def api_admin_stats_miniapp(ctx: InitContext = Init):
+        if not is_miniapp_admin(ctx.user_id, ctx.telegram_username):
+            raise HTTPException(status_code=403, detail="forbidden")
+        return await db.admin_statistics()
+
+    @app.post("/api/admin/grant")
+    async def api_admin_grant_miniapp(
+        body: AdminGrantBody,
+        ctx: InitContext = Init,
+    ):
+        if not is_miniapp_admin(ctx.user_id, ctx.telegram_username):
+            raise HTTPException(status_code=403, detail="forbidden")
+        vault_id = await db.get_vault_for_user(body.target_user_id)
+        await db.add_extra_slots(vault_id, body.slots)
+        extra = await db.get_purchased_extra_slots(vault_id)
+        cap: int | None = None
+        if FREE_DOCUMENT_LIMIT > 0:
+            cap = FREE_DOCUMENT_LIMIT + extra
+        return {
+            "ok": True,
+            "vault_id": vault_id,
+            "target_user_id": body.target_user_id,
+            "slots_added": body.slots,
+            "purchased_extra_slots_total": extra,
+            "document_cap": cap,
         }
 
     @app.get("/api/documents")

@@ -69,6 +69,7 @@
     telegramUserId: 0,
     billingManual: null,
     manualSelectedTier: null,
+    isAdmin: false,
   };
 
   function pack() {
@@ -233,6 +234,12 @@
   async function apiBootstrap() {
     const r = await fetch("/api/bootstrap", { headers: headers() });
     if (!r.ok) throw new Error("bootstrap");
+    return r.json();
+  }
+
+  async function apiAdminStats() {
+    const r = await fetch("/api/admin/stats", { headers: headers() });
+    if (!r.ok) throw new Error("admin_stats");
     return r.json();
   }
 
@@ -597,6 +604,8 @@
     state.contextMode = data.context_mode || "private";
     const hideFam = state.contextMode !== "private";
     $("#btn-family-sidebar")?.classList.toggle("hidden", hideFam);
+    state.isAdmin = !!data.is_admin;
+    $("#btn-admin-sidebar")?.classList.toggle("hidden", !state.isAdmin);
     renderSidebar();
     setFamilyHeader();
     updateAddDocButton();
@@ -1197,6 +1206,44 @@
     showToast(t("toastBulkDeleted"));
   });
 
+  function renderAdminStats(s) {
+    const wrap = $("#admin-stats-body");
+    if (!wrap) return;
+    const rows = [
+      ["adminStatUsers", s.users_registered],
+      ["adminStatVaults", s.vaults_with_uploads],
+      ["adminStatDocs", s.total_documents],
+    ];
+    wrap.innerHTML = rows
+      .map(
+        ([k, v]) =>
+          `<div class="admin-stat-row"><span>${escapeHtml(t(k))}</span><strong>${escapeHtml(String(v ?? ""))}</strong></div>`,
+      )
+      .join("");
+  }
+
+  async function openAdminModal() {
+    applyStaticI18n();
+    const wrap = $("#admin-stats-body");
+    if (wrap)
+      wrap.innerHTML = `<p class="admin-loading">${escapeHtml(t("adminStatsLoading"))}</p>`;
+    const fbEl = $("#admin-grant-feedback");
+    if (fbEl) fbEl.hidden = true;
+    $("#admin-modal")?.classList.remove("hidden");
+    try {
+      const s = await apiAdminStats();
+      renderAdminStats(s);
+    } catch {
+      if (wrap)
+        wrap.innerHTML = `<p class="admin-error">${escapeHtml(t("adminStatsFail"))}</p>`;
+      showToast(t("toastConnection"));
+    }
+  }
+
+  function closeAdminModal() {
+    $("#admin-modal")?.classList.add("hidden");
+  }
+
   async function openFamilyModal() {
     $("#family-modal")?.classList.remove("hidden");
     $("#invite-box")?.classList.add("hidden");
@@ -1240,6 +1287,62 @@
       showToast(t("toastConnection"));
     }
   }
+
+  $("#btn-admin-sidebar")?.addEventListener("click", () => {
+    closeSidebarMobile();
+    openAdminModal();
+  });
+  $("#admin-close")?.addEventListener("click", closeAdminModal);
+  $("#admin-modal")?.addEventListener("click", (e) => {
+    if (e.target.id === "admin-modal") closeAdminModal();
+  });
+  $("#admin-grant-submit")?.addEventListener("click", async () => {
+    const uidRaw = $("#admin-target-uid")?.value?.trim() || "";
+    const slotsRaw = $("#admin-slots-input")?.value?.trim() || "";
+    const target_user_id = parseInt(uidRaw, 10);
+    const slots = parseInt(slotsRaw, 10);
+    const fb = $("#admin-grant-feedback");
+    if (!Number.isFinite(target_user_id) || target_user_id < 1) {
+      if (fb) {
+        fb.textContent = t("adminInvalidUserId");
+        fb.hidden = false;
+      }
+      return;
+    }
+    if (!Number.isFinite(slots) || slots < 1 || slots > 10000) {
+      if (fb) {
+        fb.textContent = t("adminInvalidSlots");
+        fb.hidden = false;
+      }
+      return;
+    }
+    if (fb) fb.hidden = true;
+    const r = await postJson("/api/admin/grant", { target_user_id, slots });
+    if (!r.ok) {
+      const msg = t("adminGrantFail");
+      if (fb) {
+        fb.textContent = msg;
+        fb.hidden = false;
+      }
+      showToast(msg);
+      return;
+    }
+    const j = await r.json();
+    const cap =
+      j.document_cap != null ? String(j.document_cap) : t("adminCapUnlimited");
+    const okMsg = tfmt("adminGrantOk", {
+      slots: j.slots_added ?? slots,
+      cap,
+    });
+    if (fb) {
+      fb.textContent = okMsg;
+      fb.hidden = false;
+    }
+    showToast(okMsg);
+    try {
+      renderAdminStats(await apiAdminStats());
+    } catch (_) {}
+  });
 
   $("#btn-family-sidebar")?.addEventListener("click", () => {
     closeSidebarMobile();

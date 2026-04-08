@@ -54,6 +54,9 @@
           <button type="button" class="cloud-btn" id="btn-family-sidebar">
             👨‍👩‍👧 <span data-i18n="familyMenu"></span>
           </button>
+          <button type="button" class="cloud-btn hidden" id="btn-admin-sidebar">
+            ⚙️ <span data-i18n="adminMenu"></span>
+          </button>
           <button type="button" class="cloud-btn" disabled>
             ☁️ <span data-i18n="cloudBtn"></span>
           </button>
@@ -163,6 +166,43 @@
           </div>
           <p class="field-hint" id="invite-warn" hidden></p>
         </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="admin-modal" role="dialog" aria-modal="true">
+      <div class="modal sheet large">
+        <div class="panel-head">
+          <h2 data-i18n="adminPanelTitle"></h2>
+          <button type="button" class="icon-btn" id="admin-close">✕</button>
+        </div>
+        <h3 class="admin-subtitle" data-i18n="adminStatsHeading"></h3>
+        <div id="admin-stats-body" class="admin-stats-body"></div>
+        <hr class="admin-sep" />
+        <h3 class="admin-subtitle" data-i18n="adminGrantHeading"></h3>
+        <label class="field-label" data-i18n="adminTargetLabel"></label>
+        <input
+          type="number"
+          id="admin-target-uid"
+          class="field-input"
+          min="1"
+          step="1"
+          inputmode="numeric"
+          data-i18n-placeholder="adminTargetPlaceholder"
+          placeholder=""
+        />
+        <label class="field-label" data-i18n="adminSlotsLabel"></label>
+        <input
+          type="number"
+          id="admin-slots-input"
+          class="field-input"
+          min="1"
+          max="10000"
+          value="10"
+          step="1"
+          inputmode="numeric"
+        />
+        <button type="button" class="btn-primary wide" id="admin-grant-submit" data-i18n="adminGrantButton"></button>
+        <p id="admin-grant-feedback" class="field-hint admin-feedback" hidden></p>
       </div>
     </div>
 
