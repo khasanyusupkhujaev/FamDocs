@@ -38,6 +38,23 @@ def _default_solid_key() -> str:
     return f"{S3_PREFIX}/brand/Logo.png"
 
 
+async def _try_bucket_keys(
+    primary: str, fallbacks: tuple[str, ...], label: str
+) -> bytes | None:
+    """Try primary key, then fallbacks (only used when env override is not set)."""
+    for key in (primary,) + fallbacks:
+        try:
+            data = await read_bucket_key(key)
+        except StorageAccessDeniedError as e:
+            log.warning("Branding: %s logo %r: %s", label, key, e)
+            continue
+        if data:
+            if key != primary:
+                log.info("Branding: using %s logo from %r", label, key)
+            return data
+    return None
+
+
 async def load_branding_assets() -> None:
     """Idempotent: fetch from R2/S3 when configured, then fill gaps from local files."""
     global _transparent, _solid, _loaded
@@ -48,16 +65,37 @@ async def load_branding_assets() -> None:
     _solid = None
 
     if STORAGE_BACKEND == "s3":
-        t_key = LOGO_TRANSPARENT_S3_KEY or _default_transparent_key()
-        s_key = LOGO_SOLID_S3_KEY or _default_solid_key()
-        try:
-            _transparent = await read_bucket_key(t_key)
-        except StorageAccessDeniedError as e:
-            log.warning("Branding: transparent logo %r: %s", t_key, e)
-        try:
-            _solid = await read_bucket_key(s_key)
-        except StorageAccessDeniedError as e:
-            log.warning("Branding: solid logo %r: %s", s_key, e)
+        # Default path uses FAMDOC_S3_PREFIX; many uploads use plain brand/... without prefix.
+        if LOGO_TRANSPARENT_S3_KEY:
+            try:
+                _transparent = await read_bucket_key(LOGO_TRANSPARENT_S3_KEY)
+            except StorageAccessDeniedError as e:
+                log.warning(
+                    "Branding: transparent logo %r: %s", LOGO_TRANSPARENT_S3_KEY, e
+                )
+        else:
+            _transparent = await _try_bucket_keys(
+                _default_transparent_key(),
+                (
+                    "brand/logo-transparent.png",
+                    "brand/Logo_transparent.png",
+                ),
+                "transparent",
+            )
+        if LOGO_SOLID_S3_KEY:
+            try:
+                _solid = await read_bucket_key(LOGO_SOLID_S3_KEY)
+            except StorageAccessDeniedError as e:
+                log.warning("Branding: solid logo %r: %s", LOGO_SOLID_S3_KEY, e)
+        else:
+            _solid = await _try_bucket_keys(
+                _default_solid_key(),
+                (
+                    "brand/logo.png",
+                    "brand/Logo.png",
+                ),
+                "solid",
+            )
 
     if _transparent is None and LOGO_TRANSPARENT_PATH.is_file():
         _transparent = LOGO_TRANSPARENT_PATH.read_bytes()
