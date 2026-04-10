@@ -1,6 +1,8 @@
 (function () {
   const $ = (id) => document.getElementById(id);
 
+  const fetchOpts = { credentials: "same-origin" };
+
   function escapeHtml(s) {
     const d = document.createElement("div");
     d.textContent = s ?? "";
@@ -31,37 +33,6 @@
     }
   }
 
-  function tokenFromUrl() {
-    try {
-      return new URLSearchParams(window.location.search).get("token") || "";
-    } catch {
-      return "";
-    }
-  }
-
-  function rememberedToken() {
-    try {
-      return sessionStorage.getItem("famdoc_admin_token") || "";
-    } catch {
-      return "";
-    }
-  }
-
-  function persistToken(t) {
-    try {
-      sessionStorage.setItem("famdoc_admin_token", t);
-    } catch (_) {}
-  }
-
-  function currentToken() {
-    const inp = $("adm-token-input");
-    const v = (inp && inp.value.trim()) || "";
-    if (v) return v;
-    const u = tokenFromUrl();
-    if (u) return u;
-    return rememberedToken();
-  }
-
   function showError(msg) {
     const el = $("adm-error");
     if (!el) return;
@@ -69,25 +40,36 @@
     el.hidden = !msg;
   }
 
-  async function loadDashboard() {
-    const token = currentToken();
+  function setLoggedInUi(on) {
+    $("adm-login-section")?.classList.toggle("hidden", on);
+    $("adm-dashboard")?.classList.toggle("hidden", !on);
+    if (on) showError("");
+  }
+
+  async function checkSession() {
     showError("");
-    const dash = $("adm-dashboard");
-    const errBox = $("adm-error");
-    const loadBtn = $("adm-load-btn");
-    if (!token) {
-      showError("Enter the admin token (same as FAMDOC_ADMIN_WEB_TOKEN on the server).");
-      return;
-    }
-    persistToken(token);
-    if (loadBtn) loadBtn.disabled = true;
     try {
-      const r = await fetch(
-        "/admin/api/data?token=" + encodeURIComponent(token),
-      );
-      if (r.status === 401) {
-        showError("Unauthorized — check that FAMDOC_ADMIN_WEB_TOKEN is set and matches.");
-        if (dash) dash.classList.add("hidden");
+      const r = await fetch("/admin/api/me", fetchOpts);
+      if (!r.ok) return false;
+      const j = await r.json();
+      return !!(j && j.authenticated);
+    } catch {
+      return false;
+    }
+  }
+
+  async function loadDashboard() {
+    const dash = $("adm-dashboard");
+    showError("");
+    try {
+      const r = await fetch("/admin/api/data", fetchOpts);
+      if (r.status === 401 || r.status === 403) {
+        setLoggedInUi(false);
+        showError(
+          r.status === 403
+            ? "Your account is not in the admin list on the server."
+            : "Session expired — sign in with Telegram again.",
+        );
         return;
       }
       if (!r.ok) {
@@ -116,8 +98,7 @@
       const claims = data.claims || [];
       if (claimsEl) {
         if (!claims.length) {
-          claimsEl.innerHTML =
-            '<p class="adm-empty">No pending claims.</p>';
+          claimsEl.innerHTML = '<p class="adm-empty">No pending claims.</p>';
         } else {
           claimsEl.innerHTML = claims
             .map((c) => {
@@ -157,10 +138,7 @@
             );
             if (!slot) return;
             const url =
-              "/admin/api/receipt/" +
-              encodeURIComponent(String(c.user_id)) +
-              "?token=" +
-              encodeURIComponent(token);
+              "/admin/api/receipt/" + encodeURIComponent(String(c.user_id));
             if ((c.receipt_mime || "").toLowerCase().includes("pdf")) {
               const frame = document.createElement("iframe");
               frame.className = "adm-claim-receipt pdf";
@@ -179,19 +157,24 @@
           });
         }
       }
-      if (dash) dash.classList.remove("hidden");
+      setLoggedInUi(true);
     } catch {
       showError("Network error — try again.");
-      if (dash) dash.classList.add("hidden");
-    } finally {
-      if (loadBtn) loadBtn.disabled = false;
+      $("adm-dashboard")?.classList.add("hidden");
     }
   }
 
-  $("adm-load-btn")?.addEventListener("click", loadDashboard);
+  $("adm-logout-btn")?.addEventListener("click", async () => {
+    try {
+      await fetch("/admin/api/logout", { ...fetchOpts, method: "POST" });
+    } catch (_) {
+      /* ignore */
+    }
+    setLoggedInUi(false);
+    showError("");
+  });
 
   $("adm-grant-btn")?.addEventListener("click", async () => {
-    const token = currentToken();
     const uidRaw = ($("adm-grant-uid") && $("adm-grant-uid").value.trim()) || "";
     const slotsRaw =
       ($("adm-grant-slots") && $("adm-grant-slots").value.trim()) || "";
@@ -218,32 +201,25 @@
       }
       return;
     }
-    if (!token) {
-      if (msgEl) {
-        msgEl.textContent = "Token required.";
-        msgEl.hidden = false;
-        msgEl.className = "adm-error";
-      }
-      return;
-    }
     const btn = $("adm-grant-btn");
     if (btn) btn.disabled = true;
     try {
-      const r = await fetch(
-        "/admin/api/grant?token=" + encodeURIComponent(token),
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ target_user_id, slots }),
-        },
-      );
+      const r = await fetch("/admin/api/grant", {
+        ...fetchOpts,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target_user_id, slots }),
+      });
       const j = await r.json().catch(() => ({}));
+      if (r.status === 401 || r.status === 403) {
+        setLoggedInUi(false);
+        showError("Session expired or not admin — sign in again.");
+        return;
+      }
       if (!r.ok) {
         if (msgEl) {
           msgEl.textContent =
-            typeof j.detail === "string"
-              ? j.detail
-              : "Grant failed.";
+            typeof j.detail === "string" ? j.detail : "Grant failed.";
           msgEl.hidden = false;
           msgEl.className = "adm-error";
         }
@@ -273,14 +249,17 @@
     }
   });
 
-  const fromUrl = tokenFromUrl();
-  const remembered = rememberedToken();
-  const ti = $("adm-token-input");
-  if (ti) {
-    if (fromUrl) ti.value = fromUrl;
-    else if (remembered) ti.value = remembered;
-  }
-  if (fromUrl || remembered) {
-    loadDashboard();
-  }
+  (async function boot() {
+    if (await checkSession()) {
+      await loadDashboard();
+    } else {
+      setLoggedInUi(false);
+      const missing = document.querySelector(".adm-config-missing");
+      if (missing) {
+        showError(
+          "Server is missing WEBAPP_PUBLIC_URL or TELEGRAM_BOT_USERNAME — Telegram login cannot load.",
+        );
+      }
+    }
+  })();
 })();

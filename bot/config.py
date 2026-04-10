@@ -168,8 +168,6 @@ def is_miniapp_admin(telegram_user_id: int, telegram_username: str | None) -> bo
         return False
     allowed = {a.strip().lstrip("@").lower() for a in ADMIN_USERNAMES if a.strip()}
     return un in allowed
-# Optional: ?token=... for GET /admin/stats (set a long random string).
-ADMIN_WEB_TOKEN = os.getenv("FAMDOC_ADMIN_WEB_TOKEN", "").strip()
 
 # Manual transfer: show card number (spaces ok) and optional bank name line.
 TRANSFER_CARD_DISPLAY = os.getenv("FAMDOC_TRANSFER_CARD", "").strip()

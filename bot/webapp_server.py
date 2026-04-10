@@ -11,10 +11,11 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import html as html_lib
 from urllib.parse import quote, urlencode
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
@@ -32,8 +33,13 @@ from bot.billing import (
 )
 from bot.invite_parse import extract_join_token
 from bot import paytech_integration
+from bot.admin_web_auth import (
+    ADMIN_SESSION_COOKIE,
+    sign_admin_session,
+    verify_admin_session_cookie,
+    verify_telegram_login_query,
+)
 from bot.config import (
-    ADMIN_WEB_TOKEN,
     BASE_DIR,
     BILLING_MODE,
     BOT_TOKEN,
@@ -90,8 +96,36 @@ _ALLOWED_RECEIPT_TYPES = frozenset(
 )
 
 
-def _admin_web_token_ok(token: str) -> bool:
-    return bool(ADMIN_WEB_TOKEN) and token == ADMIN_WEB_TOKEN
+def _require_admin_web_user(request: Request) -> int:
+    raw = request.cookies.get(ADMIN_SESSION_COOKIE)
+    pair = verify_admin_session_cookie(BOT_TOKEN, raw)
+    if pair is None:
+        raise HTTPException(status_code=401, detail="admin_session_required")
+    uid, un = pair
+    if not is_miniapp_admin(uid, un):
+        raise HTTPException(status_code=403, detail="forbidden")
+    return uid
+
+
+def render_admin_page_html(webapp_dir: Path) -> str:
+    template = (webapp_dir / "admin.html").read_text(encoding="utf-8")
+    base = (WEBAPP_PUBLIC_URL or "").strip().rstrip("/")
+    bot_u = (BOT_USERNAME or "").strip().lstrip("@")
+    if bot_u and base:
+        auth_url = f"{base}/admin/auth/callback"
+        widget_html = (
+            '<script async src="https://telegram.org/js/telegram-widget.js?22" '
+            f'data-telegram-login="{html_lib.escape(bot_u, quote=True)}" '
+            'data-size="large" data-userpic="false" '
+            f'data-auth-url="{html_lib.escape(auth_url, quote=True)}" '
+            'data-request-access="write"></script>'
+        )
+    else:
+        widget_html = (
+            '<p class="adm-error adm-config-missing">Set <code>WEBAPP_PUBLIC_URL</code> and '
+            "<code>TELEGRAM_BOT_USERNAME</code> in the server environment so Telegram login works.</p>"
+        )
+    return template.replace("__TELEGRAM_LOGIN_WIDGET__", widget_html)
 
 
 class DocPatch(BaseModel):
@@ -799,10 +833,63 @@ def create_webapp_app() -> FastAPI:
         return Response(content=data, media_type=media)
 
     @app.get("/admin/stats")
-    async def admin_stats_http(token: str = Query("")):
-        if not _admin_web_token_ok(token):
-            raise HTTPException(status_code=401, detail="unauthorized")
+    async def admin_stats_http(request: Request):
+        _require_admin_web_user(request)
         return await db.admin_statistics()
+
+    @app.get("/admin/auth/callback")
+    async def admin_telegram_auth_callback(request: Request):
+        params = {str(k): str(v) for k, v in request.query_params.multi_items()}
+        verified = verify_telegram_login_query(params, bot_token=BOT_TOKEN)
+        if verified is None:
+            return HTMLResponse(
+                "<!DOCTYPE html><html><body><h1>Invalid Telegram login</h1>"
+                "<p>The sign-in link expired or was tampered with. Close this tab and try again from "
+                '<a href="/admin">/admin</a>.</p></body></html>',
+                status_code=400,
+                media_type="text/html; charset=utf-8",
+            )
+        uid, un = verified
+        if not is_miniapp_admin(uid, un):
+            return HTMLResponse(
+                "<!DOCTYPE html><html><body><h1>Access denied</h1>"
+                "<p>This Telegram account is not an admin. Add your numeric user ID to "
+                "<code>FAMDOC_ADMIN_TELEGRAM_IDS</code> or your @username to "
+                "<code>FAMDOC_ADMIN_USERNAMES</code> in the server .env, then redeploy.</p>"
+                '<p><a href="/admin">Back</a></p></body></html>',
+                status_code=403,
+                media_type="text/html; charset=utf-8",
+            )
+        session_val = sign_admin_session(BOT_TOKEN, uid, un)
+        resp = RedirectResponse(url="/admin", status_code=302)
+        secure = request.url.scheme == "https"
+        resp.set_cookie(
+            ADMIN_SESSION_COOKIE,
+            session_val,
+            max_age=604800,
+            httponly=True,
+            secure=secure,
+            samesite="lax",
+            path="/",
+        )
+        return resp
+
+    @app.get("/admin/api/me")
+    async def admin_api_me(request: Request):
+        raw = request.cookies.get(ADMIN_SESSION_COOKIE)
+        pair = verify_admin_session_cookie(BOT_TOKEN, raw)
+        if pair is None:
+            return {"ok": True, "authenticated": False}
+        uid, un = pair
+        if not is_miniapp_admin(uid, un):
+            return {"ok": True, "authenticated": False}
+        return {"ok": True, "authenticated": True, "user_id": uid}
+
+    @app.post("/admin/api/logout")
+    async def admin_api_logout():
+        r = JSONResponse({"ok": True})
+        r.delete_cookie(ADMIN_SESSION_COOKIE, path="/")
+        return r
 
     @app.get("/admin")
     async def admin_dashboard():
@@ -810,14 +897,13 @@ def create_webapp_app() -> FastAPI:
         if not admin_html.is_file():
             raise HTTPException(status_code=404, detail="admin_ui_missing")
         return HTMLResponse(
-            content=admin_html.read_text(encoding="utf-8"),
+            content=render_admin_page_html(webapp_dir),
             media_type="text/html; charset=utf-8",
         )
 
     @app.get("/admin/api/data")
-    async def admin_data_api(token: str = Query("")):
-        if not _admin_web_token_ok(token):
-            raise HTTPException(status_code=401, detail="unauthorized")
+    async def admin_data_api(request: Request):
+        _require_admin_web_user(request)
         stats = await db.admin_statistics()
         rows = await db.list_manual_payment_claims()
         claims: list[dict] = []
@@ -844,9 +930,8 @@ def create_webapp_app() -> FastAPI:
         return {"stats": stats, "claims": claims}
 
     @app.get("/admin/api/receipt/{user_id}")
-    async def admin_receipt_api(user_id: int, token: str = Query("")):
-        if not _admin_web_token_ok(token):
-            raise HTTPException(status_code=401, detail="unauthorized")
+    async def admin_receipt_api(user_id: int, request: Request):
+        _require_admin_web_user(request)
         row = await db.get_manual_payment_claim(user_id)
         if not row:
             raise HTTPException(status_code=404, detail="not_found")
@@ -861,9 +946,8 @@ def create_webapp_app() -> FastAPI:
         return Response(content=data, media_type=media)
 
     @app.post("/admin/api/grant")
-    async def admin_grant_web(body: AdminGrantBody, token: str = Query("")):
-        if not _admin_web_token_ok(token):
-            raise HTTPException(status_code=401, detail="unauthorized")
+    async def admin_grant_web(body: AdminGrantBody, request: Request):
+        _require_admin_web_user(request)
         vault_id = await db.get_vault_for_user(body.target_user_id)
         await db.add_extra_slots(vault_id, body.slots)
         await db.delete_manual_payment_claim(body.target_user_id)

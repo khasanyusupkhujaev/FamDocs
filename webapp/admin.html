@@ -11,45 +11,43 @@
     <header class="adm-head">
       <h1>FamDoc Admin</h1>
       <p class="adm-lead">
-        Open this page only over HTTPS. Keep your token secret — anyone with it can grant
-        slots and view payment receipts.
+        Sign in with the same Telegram account you configured as admin (see
+        <code>FAMDOC_ADMIN_TELEGRAM_IDS</code> or <code>FAMDOC_ADMIN_USERNAMES</code> in
+        <code>.env</code>).
       </p>
     </header>
 
-    <section class="adm-card" id="adm-token-section">
-      <h2>Access</h2>
+    <section class="adm-card" id="adm-login-section">
+      <h2>Sign in with Telegram</h2>
       <p class="adm-hint">
-        Add <code>?token=…</code> to the URL once, or paste the same value as in
-        <code>FAMDOC_ADMIN_WEB_TOKEN</code> on the server.
+        After tapping the button, Telegram may open in a browser or app. You will be sent
+        back here with a secure session cookie. If the button does not appear, set the bot
+        domain in <span class="mono">@BotFather</span> (<code>/setdomain</code>) to the
+        same host as <code>WEBAPP_PUBLIC_URL</code> (e.g. <code>famdoc.onrender.com</code>).
       </p>
-      <label class="adm-label" for="adm-token-input">Admin token</label>
-      <div class="adm-token-row">
-        <input
-          type="password"
-          id="adm-token-input"
-          class="adm-input"
-          autocomplete="current-password"
-          placeholder="Paste token"
-        />
-        <button type="button" class="adm-btn adm-btn-primary" id="adm-load-btn">
-          Load dashboard
-        </button>
-      </div>
+      <div id="adm-widget-wrap" class="adm-widget-wrap">__TELEGRAM_LOGIN_WIDGET__</div>
       <p class="adm-error" id="adm-error" hidden></p>
     </section>
 
     <section class="adm-card hidden" id="adm-dashboard">
-      <h2>Statistics</h2>
+      <div class="adm-dash-head">
+        <h2 class="adm-dash-title">Dashboard</h2>
+        <button type="button" class="adm-btn adm-btn-ghost" id="adm-logout-btn">
+          Sign out
+        </button>
+      </div>
+
+      <h3 class="adm-subh">Statistics</h3>
       <div id="adm-stats" class="adm-stats"></div>
 
-      <h2>Pending payment claims</h2>
+      <h3 class="adm-subh">Pending payment claims</h3>
       <p class="adm-hint">
         Users who submitted a bank transfer receipt. Grant slots after you verify the
         payment matches your policy.
       </p>
       <div id="adm-claims" class="adm-claims"></div>
 
-      <h2>Grant extra document slots</h2>
+      <h3 class="adm-subh">Grant extra document slots</h3>
       <label class="adm-label" for="adm-grant-uid">Telegram user ID</label>
       <input type="text" id="adm-grant-uid" class="adm-input" inputmode="numeric" />
       <label class="adm-label" for="adm-grant-slots">Slots to add</label>

@@ -943,6 +943,11 @@
     setTimeout(() => pw?.classList.add("hidden"), 600);
   });
 
+  function detailPdfIframeHtml(blobUrl) {
+    const u = String(blobUrl).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+    return `<div class="detail-preview-frame detail-preview-pdf"><iframe class="detail-iframe" src="${u}#view=FitH&toolbar=0" title="PDF"></iframe></div>`;
+  }
+
   function openDetail(doc) {
     state.currentDetail = doc;
     $("#detail-modal")?.classList.remove("hidden");
@@ -961,22 +966,47 @@
         r.ok ? r.blob() : Promise.reject(),
       );
 
+    const narrowForPdf =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(max-width: 700px)").matches;
+
     if (mime.startsWith("image/")) {
       loadBlob()
         .then((blob) => {
           const url = URL.createObjectURL(blob);
           previewUrls.push(url);
-          prev.innerHTML = `<div class="detail-preview-frame"><img src="${url}" alt="" class="detail-img" /></div>`;
+          prev.innerHTML = `<div class="detail-preview-frame detail-preview-image"><img src="${url}" alt="" class="detail-img" decoding="async" /></div>`;
         })
         .catch(() => {});
     } else if (mime.includes("pdf")) {
-      loadBlob()
-        .then((blob) => {
-          const url = URL.createObjectURL(blob);
-          previewUrls.push(url);
-          prev.innerHTML = `<div class="detail-preview-frame"><iframe class="detail-iframe" src="${url}#view=Fit&toolbar=0" title="PDF"></iframe></div>`;
-        })
-        .catch(() => {});
+      const showRasterPdf =
+        narrowForPdf && doc.has_preview === true;
+      if (showRasterPdf) {
+        fetch(`/api/documents/${doc.id}/preview`, { headers: headers() })
+          .then((r) => (r.ok ? r.blob() : Promise.reject()))
+          .then((blob) => {
+            const url = URL.createObjectURL(blob);
+            previewUrls.push(url);
+            prev.innerHTML = `<div class="detail-preview-frame detail-preview-image"><img src="${url}" alt="" class="detail-img" decoding="async" /></div>`;
+          })
+          .catch(() => {
+            loadBlob()
+              .then((blob) => {
+                const url = URL.createObjectURL(blob);
+                previewUrls.push(url);
+                prev.innerHTML = detailPdfIframeHtml(url);
+              })
+              .catch(() => {});
+          });
+      } else {
+        loadBlob()
+          .then((blob) => {
+            const url = URL.createObjectURL(blob);
+            previewUrls.push(url);
+            prev.innerHTML = detailPdfIframeHtml(url);
+          })
+          .catch(() => {});
+      }
     }
   }
 

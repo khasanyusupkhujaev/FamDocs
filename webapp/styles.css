@@ -725,7 +725,7 @@ body {
 }
 
 .sheet.large {
-  max-width: 520px;
+  max-width: min(520px, 100vw - 8px);
 }
 
 .sheet.small {
@@ -939,49 +939,93 @@ body {
 }
 
 .detail-preview {
+  --detail-preview-max-h: min(62dvh, 62vh, 520px);
   min-height: 0;
   border-radius: var(--radius);
   background: linear-gradient(145deg, #eef6ff, #f8fbff);
   margin-bottom: 14px;
-  overflow: hidden;
+  overflow: visible;
+  width: 100%;
+  max-width: 100%;
 }
 
 .detail-preview-frame {
   width: 100%;
-  max-height: min(52dvh, 420px);
-  min-height: 120px;
+  max-width: 100%;
+  min-height: 100px;
+  max-height: var(--detail-preview-max-h);
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 4px;
+  padding: 6px;
   box-sizing: border-box;
+  touch-action: pan-x pan-y pinch-zoom;
+}
+
+.detail-preview-frame.detail-preview-pdf {
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  height: var(--detail-preview-max-h);
+  max-height: var(--detail-preview-max-h);
+  min-height: min(36dvh, 260px);
+}
+
+.detail-preview-frame.detail-preview-image {
+  max-height: var(--detail-preview-max-h);
 }
 
 .detail-preview img.detail-img {
+  width: 100%;
   max-width: 100%;
-  width: auto;
   height: auto;
-  max-height: min(52dvh, 420px);
+  max-height: var(--detail-preview-max-h);
   object-fit: contain;
+  object-position: center center;
   display: block;
   margin: 0 auto;
+  flex-shrink: 1;
 }
 
 .detail-preview .detail-iframe {
+  display: block;
   width: 100%;
-  height: min(52dvh, 420px);
-  min-height: 200px;
   max-width: 100%;
+  min-width: 0;
   border: none;
   border-radius: var(--radius-sm);
   background: #fff;
 }
 
+.detail-preview-frame.detail-preview-pdf .detail-iframe {
+  height: 100%;
+  min-height: 0;
+}
+
 .detail-preview .ph {
   font-size: clamp(2rem, 12vw, 3.5rem);
   opacity: 0.35;
+}
+
+@media (max-width: 700px) {
+  .detail-preview {
+    --detail-preview-max-h: min(58dvh, 70vh, 480px);
+  }
+
+  #detail-modal.modal-overlay {
+    padding: 8px;
+    align-items: flex-end;
+  }
+
+  #detail-modal .modal.sheet.large {
+    max-height: min(94dvh, 94vh);
+    width: 100%;
+    max-width: 100%;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
 }
 
 .detail-actions {
