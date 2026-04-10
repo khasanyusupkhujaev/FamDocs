@@ -1576,6 +1576,21 @@
       prev.innerHTML = detailPdfIframeHtml(url);
     };
 
+    /** Decrypted PDF → first-page JPEG via pdf.js (Telegram WebView often blocks blob PDF iframes). */
+    async function showPdfRasterFromDecryptedBlob(blob) {
+      const V = window.FamDocVaultCrypto;
+      if (!V || typeof V.maybePdfPreviewBlob !== "function") return false;
+      const file = new File(
+        [blob],
+        doc.original_filename || "document.pdf",
+        { type: blob.type || "application/pdf" },
+      );
+      const jpeg = await V.maybePdfPreviewBlob(file);
+      if (!jpeg) return false;
+      showImagePreview(jpeg);
+      return true;
+    }
+
     if (mime.startsWith("image/")) {
       loadFullFile()
         .then(showImagePreview)
@@ -1585,19 +1600,22 @@
             .catch(() => {});
         });
     } else if (mime.includes("pdf")) {
-      if (doc.has_preview) {
-        loadPreviewThumb()
-          .then(showImagePreview)
-          .catch(() => {
-            loadFullFile()
-              .then(showPdfIframe)
-              .catch(() => {});
-          });
-      } else {
-        loadFullFile()
-          .then(showPdfIframe)
-          .catch(() => {});
-      }
+      void (async () => {
+        try {
+          try {
+            const b = await loadPreviewThumb();
+            showImagePreview(b);
+            return;
+          } catch (_) {
+            /* no stored preview or 404 */
+          }
+          const blob = await loadFullFile();
+          if (await showPdfRasterFromDecryptedBlob(blob)) return;
+          showPdfIframe(blob);
+        } catch (_) {
+          /* keep placeholder */
+        }
+      })();
     }
   }
 
