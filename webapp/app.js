@@ -1508,6 +1508,50 @@
     return `<div class="detail-preview-frame detail-preview-pdf"><iframe class="detail-iframe" src="${u}#view=FitH&toolbar=0" title="PDF"></iframe></div>`;
   }
 
+  /**
+   * Full scrollable PDF preview (all pages) via pdf.js — works in Telegram WebView
+   * where blob: PDF iframes often fail.
+   */
+  async function renderPdfDetailAllPages(blob, containerEl) {
+    const pdfjsLib = globalThis.pdfjsLib;
+    if (!pdfjsLib || typeof pdfjsLib.getDocument !== "function") return false;
+    try {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "/static/pdf.worker.min.js";
+      const ab = await blob.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
+      const wrap = document.createElement("div");
+      wrap.className = "detail-pdf-pages";
+      const maxCssW = Math.min(
+        typeof window !== "undefined" ? window.innerWidth - 48 : 400,
+        560,
+      );
+      for (let num = 1; num <= pdf.numPages; num++) {
+        const page = await pdf.getPage(num);
+        const base = page.getViewport({ scale: 1 });
+        const scale = Math.min(2.25, maxCssW / base.width);
+        const viewport = page.getViewport({ scale });
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d", { alpha: false });
+        if (!ctx) return false;
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        canvas.className = "detail-pdf-page-canvas";
+        const task = page.render({ canvasContext: ctx, viewport });
+        await task.promise;
+        wrap.appendChild(canvas);
+      }
+      const frame = document.createElement("div");
+      frame.className = "detail-preview-frame detail-preview-pdfjs";
+      frame.appendChild(wrap);
+      containerEl.innerHTML = "";
+      containerEl.appendChild(frame);
+      return true;
+    } catch (e) {
+      console.warn("renderPdfDetailAllPages", e);
+      return false;
+    }
+  }
+
   function openDetail(doc) {
     state.currentDetail = doc;
     $("#detail-modal")?.classList.remove("hidden");
@@ -1602,18 +1646,17 @@
     } else if (mime.includes("pdf")) {
       void (async () => {
         try {
-          try {
-            const b = await loadPreviewThumb();
-            showImagePreview(b);
-            return;
-          } catch (_) {
-            /* no stored preview or 404 */
-          }
           const blob = await loadFullFile();
+          if (await renderPdfDetailAllPages(blob, prev)) return;
           if (await showPdfRasterFromDecryptedBlob(blob)) return;
           showPdfIframe(blob);
         } catch (_) {
-          /* keep placeholder */
+          try {
+            const b = await loadPreviewThumb();
+            showImagePreview(b);
+          } catch {
+            /* keep placeholder */
+          }
         }
       })();
     }
@@ -1654,39 +1697,6 @@
     closeDetail();
     await refreshBootstrap();
     await loadDocuments();
-  });
-
-  $("#detail-download")?.addEventListener("click", async () => {
-    const doc = state.currentDetail;
-    if (!doc) return;
-    syncInitData();
-    const fname = doc.original_filename;
-    if (!docIsEncrypted(doc) && typeof tg?.downloadFile === "function" && initData) {
-      tg.downloadFile(
-        { url: authFileDownloadUrl(doc.id), file_name: fname },
-        (accepted) => {
-          if (accepted === false) showToast(t("toastDownloadFail"));
-        },
-      );
-      return;
-    }
-    const r = await apiFetch(`/api/documents/${doc.id}/file`, { headers: headers() });
-    if (!r.ok) {
-      showToast(t("toastDownloadFail"));
-      return;
-    }
-    let blob = await r.blob();
-    if (docIsEncrypted(doc)) {
-      try {
-        blob = await decryptFileBlob(doc, r, blob);
-      } catch {
-        showToast(t("toastDownloadFail"));
-        return;
-      }
-    } else if (isLegacyPlaintext(doc)) {
-      scheduleLegacyMigrate(doc, blob);
-    }
-    downloadBlobToDevice(blob, fname);
   });
 
   $("#detail-share")?.addEventListener("click", async () => {

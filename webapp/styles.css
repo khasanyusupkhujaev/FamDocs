@@ -1432,6 +1432,38 @@ body {
   max-height: var(--detail-preview-max-h);
 }
 
+.detail-preview-frame.detail-preview-pdfjs {
+  display: block;
+  align-items: stretch;
+  justify-content: flex-start;
+  max-height: var(--detail-preview-max-h);
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 10px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  touch-action: pan-x pan-y pinch-zoom;
+}
+
+.detail-pdf-pages {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: center;
+  width: 100%;
+}
+
+.detail-pdf-page-canvas {
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  display: block;
+  background: #fff;
+  box-shadow: var(--shadow);
+  border-radius: 6px;
+}
+
 .detail-preview img.detail-img {
   width: 100%;
   max-width: 100%;
