@@ -53,6 +53,26 @@ body {
   min-height: 44px;
 }
 
+.adm-login-sep {
+  border: none;
+  border-top: 1px solid var(--adm-border);
+  margin: 22px 0;
+}
+
+.adm-optional {
+  font-weight: 400;
+  color: var(--adm-muted);
+}
+
+.adm-login-submit {
+  margin-top: 14px;
+  width: 100%;
+}
+
+#adm-password-block .adm-label:first-of-type {
+  margin-top: 0;
+}
+
 .adm-dash-head {
   display: flex;
   align-items: center;

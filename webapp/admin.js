@@ -58,6 +58,32 @@
     }
   }
 
+  async function applyLoginLayout() {
+    let cfg = { telegram_widget_ok: false, password_login_ok: false };
+    try {
+      const r = await fetch("/admin/api/config", fetchOpts);
+      if (r.ok) cfg = await r.json();
+    } catch (_) {
+      /* ignore */
+    }
+    const tw = !!cfg.telegram_widget_ok;
+    const pw = !!cfg.password_login_ok;
+    $("adm-telegram-block")?.classList.toggle("hidden", !tw);
+    $("adm-password-block")?.classList.toggle("hidden", !pw);
+    $("adm-login-sep")?.classList.toggle("hidden", !(tw && pw));
+    const none = $("adm-no-methods");
+    if (!tw && !pw) {
+      if (none) {
+        none.textContent =
+          "Admin login is not configured. On the server set FAMDOC_ADMIN_PANEL_SECRET and/or WEBAPP_PUBLIC_URL + TELEGRAM_BOT_USERNAME, then redeploy.";
+        none.hidden = false;
+      }
+    } else if (none) {
+      none.hidden = true;
+      none.textContent = "";
+    }
+  }
+
   async function loadDashboard() {
     const dash = $("adm-dashboard");
     showError("");
@@ -65,10 +91,11 @@
       const r = await fetch("/admin/api/data", fetchOpts);
       if (r.status === 401 || r.status === 403) {
         setLoggedInUi(false);
+        await applyLoginLayout();
         showError(
           r.status === 403
             ? "Your account is not in the admin list on the server."
-            : "Session expired — sign in with Telegram again.",
+            : "Session expired — sign in again.",
         );
         return;
       }
@@ -172,6 +199,7 @@
     }
     setLoggedInUi(false);
     showError("");
+    await applyLoginLayout();
   });
 
   $("adm-grant-btn")?.addEventListener("click", async () => {
@@ -213,6 +241,7 @@
       const j = await r.json().catch(() => ({}));
       if (r.status === 401 || r.status === 403) {
         setLoggedInUi(false);
+        await applyLoginLayout();
         showError("Session expired or not admin — sign in again.");
         return;
       }
@@ -249,17 +278,66 @@
     }
   });
 
+  $("adm-login-submit")?.addEventListener("click", async () => {
+    showError("");
+    const uidRaw = ($("adm-login-uid") && $("adm-login-uid").value.trim()) || "";
+    const unameRaw =
+      ($("adm-login-uname") && $("adm-login-uname").value.trim()) || "";
+    const secret = ($("adm-login-secret") && $("adm-login-secret").value) || "";
+    const uid = parseInt(uidRaw, 10);
+    if (!Number.isFinite(uid) || uid < 1) {
+      showError("Enter a valid Telegram user ID.");
+      return;
+    }
+    if (!secret) {
+      showError("Enter the panel secret.");
+      return;
+    }
+    const btn = $("adm-login-submit");
+    if (btn) btn.disabled = true;
+    try {
+      const r = await fetch("/admin/api/login", {
+        ...fetchOpts,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          telegram_user_id: uid,
+          telegram_username: unameRaw,
+          secret,
+        }),
+      });
+      if (r.status === 503) {
+        showError("Panel secret login is not enabled on the server.");
+        return;
+      }
+      if (r.status === 401) {
+        showError("Wrong Telegram ID, username, or panel secret.");
+        return;
+      }
+      if (r.status === 403) {
+        showError("That Telegram ID is not in the server admin list.");
+        return;
+      }
+      if (!r.ok) {
+        showError("Could not sign in.");
+        return;
+      }
+      const sec = $("adm-login-secret");
+      if (sec) sec.value = "";
+      await loadDashboard();
+    } catch {
+      showError("Network error.");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
+
   (async function boot() {
     if (await checkSession()) {
       await loadDashboard();
     } else {
       setLoggedInUi(false);
-      const missing = document.querySelector(".adm-config-missing");
-      if (missing) {
-        showError(
-          "Server is missing WEBAPP_PUBLIC_URL or TELEGRAM_BOT_USERNAME — Telegram login cannot load.",
-        );
-      }
+      await applyLoginLayout();
     }
   })();
 })();

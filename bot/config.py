@@ -169,6 +169,10 @@ def is_miniapp_admin(telegram_user_id: int, telegram_username: str | None) -> bo
     allowed = {a.strip().lstrip("@").lower() for a in ADMIN_USERNAMES if a.strip()}
     return un in allowed
 
+
+# Optional: sign in at /admin without Telegram Login widget (ID + secret must both match).
+ADMIN_PANEL_SECRET = os.getenv("FAMDOC_ADMIN_PANEL_SECRET", "").strip()
+
 # Manual transfer: show card number (spaces ok) and optional bank name line.
 TRANSFER_CARD_DISPLAY = os.getenv("FAMDOC_TRANSFER_CARD", "").strip()
 TRANSFER_INSTRUCTIONS = (os.getenv("FAMDOC_TRANSFER_INSTRUCTIONS", "") or "").strip()

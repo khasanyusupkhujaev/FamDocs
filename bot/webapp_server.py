@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -40,6 +42,7 @@ from bot.admin_web_auth import (
     verify_telegram_login_query,
 )
 from bot.config import (
+    ADMIN_PANEL_SECRET,
     BASE_DIR,
     BILLING_MODE,
     BOT_TOKEN,
@@ -96,6 +99,16 @@ _ALLOWED_RECEIPT_TYPES = frozenset(
 )
 
 
+def _admin_panel_secret_matches(got: str, expected: str) -> bool:
+    """Constant-time compare without requiring equal string lengths."""
+    if not expected or not got:
+        return False
+    return hmac.compare_digest(
+        hashlib.sha256(got.encode("utf-8")).digest(),
+        hashlib.sha256(expected.encode("utf-8")).digest(),
+    )
+
+
 def _require_admin_web_user(request: Request) -> int:
     raw = request.cookies.get(ADMIN_SESSION_COOKIE)
     pair = verify_admin_session_cookie(BOT_TOKEN, raw)
@@ -122,8 +135,9 @@ def render_admin_page_html(webapp_dir: Path) -> str:
         )
     else:
         widget_html = (
-            '<p class="adm-error adm-config-missing">Set <code>WEBAPP_PUBLIC_URL</code> and '
-            "<code>TELEGRAM_BOT_USERNAME</code> in the server environment so Telegram login works.</p>"
+            '<p class="adm-hint adm-widget-fallback">Telegram button needs '
+            "<code>WEBAPP_PUBLIC_URL</code> and <code>TELEGRAM_BOT_USERNAME</code> "
+            "on the server. You can still use <strong>Telegram ID + panel secret</strong> below.</p>"
         )
     return template.replace("__TELEGRAM_LOGIN_WIDGET__", widget_html)
 
@@ -155,6 +169,12 @@ class InviteAcceptBody(BaseModel):
 class AdminGrantBody(BaseModel):
     target_user_id: int = Field(..., ge=1)
     slots: int = Field(..., ge=1, le=10_000)
+
+
+class AdminPasswordLoginBody(BaseModel):
+    telegram_user_id: int = Field(..., ge=1)
+    secret: str = Field(..., min_length=1, max_length=500)
+    telegram_username: str = Field("", max_length=64)
 
 
 @dataclass
@@ -884,6 +904,47 @@ def create_webapp_app() -> FastAPI:
         if not is_miniapp_admin(uid, un):
             return {"ok": True, "authenticated": False}
         return {"ok": True, "authenticated": True, "user_id": uid}
+
+    @app.get("/admin/api/config")
+    async def admin_public_config():
+        telegram_widget_ok = bool(
+            (WEBAPP_PUBLIC_URL or "").strip() and (BOT_USERNAME or "").strip()
+        )
+        password_login_ok = bool(ADMIN_PANEL_SECRET)
+        return {
+            "telegram_widget_ok": telegram_widget_ok,
+            "password_login_ok": password_login_ok,
+        }
+
+    @app.post("/admin/api/login")
+    async def admin_password_login(
+        request: Request,
+        body: AdminPasswordLoginBody,
+    ):
+        if not ADMIN_PANEL_SECRET:
+            raise HTTPException(
+                status_code=503,
+                detail="admin_panel_secret_not_configured",
+            )
+        if not _admin_panel_secret_matches(body.secret, ADMIN_PANEL_SECRET):
+            raise HTTPException(status_code=401, detail="invalid_credentials")
+        raw_un = (body.telegram_username or "").strip().lstrip("@")
+        un = raw_un if raw_un else None
+        if not is_miniapp_admin(body.telegram_user_id, un):
+            raise HTTPException(status_code=403, detail="not_admin")
+        session_val = sign_admin_session(BOT_TOKEN, body.telegram_user_id, un)
+        resp = JSONResponse({"ok": True})
+        secure = request.url.scheme == "https"
+        resp.set_cookie(
+            ADMIN_SESSION_COOKIE,
+            session_val,
+            max_age=604800,
+            httponly=True,
+            secure=secure,
+            samesite="lax",
+            path="/",
+        )
+        return resp
 
     @app.post("/admin/api/logout")
     async def admin_api_logout():

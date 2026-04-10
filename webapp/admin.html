@@ -11,21 +11,68 @@
     <header class="adm-head">
       <h1>FamDoc Admin</h1>
       <p class="adm-lead">
-        Sign in with the same Telegram account you configured as admin (see
-        <code>FAMDOC_ADMIN_TELEGRAM_IDS</code> or <code>FAMDOC_ADMIN_USERNAMES</code> in
-        <code>.env</code>).
+        Access is limited to accounts listed in
+        <code>FAMDOC_ADMIN_TELEGRAM_IDS</code> or <code>FAMDOC_ADMIN_USERNAMES</code> on the
+        server.
       </p>
     </header>
 
     <section class="adm-card" id="adm-login-section">
-      <h2>Sign in with Telegram</h2>
-      <p class="adm-hint">
-        After tapping the button, Telegram may open in a browser or app. You will be sent
-        back here with a secure session cookie. If the button does not appear, set the bot
-        domain in <span class="mono">@BotFather</span> (<code>/setdomain</code>) to the
-        same host as <code>WEBAPP_PUBLIC_URL</code> (e.g. <code>famdoc.onrender.com</code>).
-      </p>
-      <div id="adm-widget-wrap" class="adm-widget-wrap">__TELEGRAM_LOGIN_WIDGET__</div>
+      <p class="adm-error" id="adm-no-methods" hidden></p>
+
+      <div id="adm-telegram-block" class="hidden">
+        <h2>Sign in with Telegram</h2>
+        <p class="adm-hint">
+          After tapping the button, Telegram opens and sends you back with a session cookie.
+          If the button is missing, set the bot domain in <span class="mono">@BotFather</span>
+          (<code>/setdomain</code>) to the same host as <code>WEBAPP_PUBLIC_URL</code>.
+        </p>
+        <div id="adm-widget-wrap" class="adm-widget-wrap">__TELEGRAM_LOGIN_WIDGET__</div>
+      </div>
+
+      <div id="adm-login-sep" class="adm-login-sep hidden" role="presentation"></div>
+
+      <div id="adm-password-block" class="hidden">
+        <h2>Sign in with Telegram ID + panel secret</h2>
+        <p class="adm-hint">
+          Use your numeric Telegram user ID (same value as in
+          <code>FAMDOC_ADMIN_TELEGRAM_IDS</code>) and the secret from
+          <code>FAMDOC_ADMIN_PANEL_SECRET</code> in the server <code>.env</code>. If you are
+          admin only by <code>@username</code>, enter your ID from
+          <span class="mono">@userinfobot</span> and your username below.
+        </p>
+        <label class="adm-label" for="adm-login-uid">Telegram user ID</label>
+        <input
+          type="text"
+          id="adm-login-uid"
+          class="adm-input"
+          inputmode="numeric"
+          autocomplete="username"
+          placeholder="e.g. 123456789"
+        />
+        <label class="adm-label" for="adm-login-uname"
+          >Telegram username <span class="adm-optional">(optional)</span></label
+        >
+        <input
+          type="text"
+          id="adm-login-uname"
+          class="adm-input"
+          autocomplete="off"
+          placeholder="without @ — only if you use FAMDOC_ADMIN_USERNAMES"
+        />
+        <label class="adm-label" for="adm-login-secret">Panel secret</label>
+        <input
+          type="password"
+          id="adm-login-secret"
+          class="adm-input"
+          autocomplete="current-password"
+          placeholder="FAMDOC_ADMIN_PANEL_SECRET"
+        />
+        <button type="button" class="adm-btn adm-btn-primary adm-login-submit" id="adm-login-submit">
+          Sign in
+        </button>
+      </div>
+
       <p class="adm-error" id="adm-error" hidden></p>
     </section>
 
