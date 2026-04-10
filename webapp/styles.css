@@ -1618,6 +1618,125 @@ body {
   transform: scale(0.96);
 }
 
+/* Full-document preview (stacked above detail sheet) */
+.detail-fullpreview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+  background: rgba(15, 25, 40, 0.52);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+}
+
+.detail-fullpreview-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 100%;
+  width: 100%;
+  max-width: 920px;
+  margin: 0 auto;
+  background: var(--tg-bg);
+  color: var(--tg-text);
+  border-radius: var(--radius) var(--radius) 0 0;
+  box-shadow: var(--shadow-hover);
+}
+
+@media (min-width: 701px) {
+  .detail-fullpreview-panel {
+    flex: 0 1 auto;
+    margin: auto;
+    max-height: min(96dvh, 96vh);
+    border-radius: var(--radius);
+    width: calc(100% - 28px);
+  }
+}
+
+.detail-fullpreview-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-fullpreview-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.detail-fullpreview-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px 14px 18px;
+  /* Child frames use --detail-preview-max-h from .detail-preview; define here for PDF/image */
+  --detail-preview-max-h: none;
+}
+
+.detail-fullpreview-body .detail-preview-frame.detail-preview-pdfjs {
+  max-height: none;
+}
+
+.detail-fullpreview-body .detail-preview-frame.detail-preview-image {
+  max-height: none;
+}
+
+.detail-fullpreview-body .detail-preview-frame.detail-preview-pdf.fullpreview-pdf-iframe {
+  max-height: none;
+  height: min(88dvh, 88vh);
+  min-height: min(50dvh, 420px);
+}
+
+.detail-fullpreview-body .detail-preview-frame.detail-preview-pdf.fullpreview-pdf-iframe .detail-iframe {
+  height: 100%;
+  min-height: min(85dvh, 700px);
+}
+
+.fullpreview-loading {
+  text-align: center;
+  color: var(--muted);
+  padding: 28px 16px;
+  font-size: 0.95rem;
+}
+
+.fullpreview-err {
+  margin: 0;
+  color: var(--muted);
+  text-align: center;
+  padding: 28px 16px;
+  line-height: 1.45;
+}
+
+.fullpreview-img-wrap {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+
+.fullpreview-img {
+  max-width: 100%;
+  width: auto;
+  height: auto;
+  display: block;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+}
+
 .btn-detail-delete-ico {
   font-size: 1.35rem;
   line-height: 1;

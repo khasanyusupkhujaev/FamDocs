@@ -99,6 +99,8 @@
     vaultCrypto: {},
     vaultKdfSalt: "",
     vaultState: "none",
+    /** Last decrypted file blob for the open detail doc (reuse for full preview). */
+    detailFileCache: null,
   };
 
   function pack() {
@@ -565,6 +567,7 @@
 
   let listThumbUrls = [];
   let previewUrls = [];
+  let fullPreviewUrls = [];
 
   function revokeListThumbs() {
     listThumbUrls.forEach((u) => URL.revokeObjectURL(u));
@@ -574,6 +577,26 @@
   function revokePreviews() {
     previewUrls.forEach((u) => URL.revokeObjectURL(u));
     previewUrls = [];
+  }
+
+  function revokeFullPreview() {
+    fullPreviewUrls.forEach((u) => URL.revokeObjectURL(u));
+    fullPreviewUrls = [];
+    const body = $("#detail-fullpreview-body");
+    if (body) body.innerHTML = "";
+  }
+
+  async function fetchDecryptedDocumentBlob(doc) {
+    const r = await apiFetch(`/api/documents/${doc.id}/file`, { headers: headers() });
+    if (!r.ok) throw new Error("no_file");
+    let blob = await r.blob();
+    if (docIsEncrypted(doc)) {
+      blob = await decryptFileBlob(doc, r, blob);
+    }
+    if (isLegacyPlaintext(doc)) {
+      scheduleLegacyMigrate(doc, blob);
+    }
+    return blob;
   }
 
   function renderSidebar() {
@@ -1512,7 +1535,7 @@
    * Full scrollable PDF preview (all pages) via pdf.js — works in Telegram WebView
    * where blob: PDF iframes often fail.
    */
-  async function renderPdfDetailAllPages(blob, containerEl) {
+  async function renderPdfDetailAllPages(blob, containerEl, maxCssWOverride) {
     const pdfjsLib = globalThis.pdfjsLib;
     if (!pdfjsLib || typeof pdfjsLib.getDocument !== "function") return false;
     try {
@@ -1521,10 +1544,13 @@
       const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
       const wrap = document.createElement("div");
       wrap.className = "detail-pdf-pages";
-      const maxCssW = Math.min(
-        typeof window !== "undefined" ? window.innerWidth - 48 : 400,
-        560,
-      );
+      const maxCssW =
+        typeof maxCssWOverride === "number"
+          ? maxCssWOverride
+          : Math.min(
+              typeof window !== "undefined" ? window.innerWidth - 48 : 400,
+              560,
+            );
       for (let num = 1; num <= pdf.numPages; num++) {
         const page = await pdf.getPage(num);
         const base = page.getViewport({ scale: 1 });
@@ -1593,21 +1619,6 @@
         },
       );
 
-    const loadFullFile = () =>
-      apiFetch(`/api/documents/${doc.id}/file`, { headers: headers() }).then(
-        async (r) => {
-          if (!r.ok) throw new Error("no_file");
-          let blob = await r.blob();
-          if (docIsEncrypted(doc)) {
-            blob = await decryptFileBlob(doc, r, blob);
-          }
-          if (isLegacyPlaintext(doc)) {
-            scheduleLegacyMigrate(doc, blob);
-          }
-          return blob;
-        },
-      );
-
     const showImagePreview = (blob) => {
       const url = URL.createObjectURL(blob);
       previewUrls.push(url);
@@ -1636,35 +1647,124 @@
     }
 
     if (mime.startsWith("image/")) {
-      loadFullFile()
-        .then(showImagePreview)
+      fetchDecryptedDocumentBlob(doc)
+        .then((blob) => {
+          state.detailFileCache = { id: doc.id, blob };
+          showImagePreview(blob);
+        })
         .catch(() => {
           loadPreviewThumb()
-            .then(showImagePreview)
+            .then((b) => {
+              showImagePreview(b);
+            })
             .catch(() => {});
         });
     } else if (mime.includes("pdf")) {
       void (async () => {
         try {
-          const blob = await loadFullFile();
+          const blob = await fetchDecryptedDocumentBlob(doc);
+          state.detailFileCache = { id: doc.id, blob };
           if (await renderPdfDetailAllPages(blob, prev)) return;
           if (await showPdfRasterFromDecryptedBlob(blob)) return;
           showPdfIframe(blob);
         } catch (_) {
           try {
             const b = await loadPreviewThumb();
+            state.detailFileCache = null;
             showImagePreview(b);
           } catch {
+            state.detailFileCache = null;
             /* keep placeholder */
           }
         }
       })();
+    } else {
+      state.detailFileCache = null;
     }
   }
 
+  function closeFullPreview() {
+    $("#detail-fullpreview-overlay")?.classList.add("hidden");
+    revokeFullPreview();
+  }
+
+  async function openDocumentFullPreview() {
+    const doc = state.currentDetail;
+    const ov = $("#detail-fullpreview-overlay");
+    const body = $("#detail-fullpreview-body");
+    const titleEl = $("#detail-fullpreview-title");
+    if (!doc || !ov || !body) return;
+    if (titleEl) {
+      titleEl.textContent = doc.original_filename || t("fullPreviewTitle");
+    }
+    revokeFullPreview();
+    body.innerHTML = `<div class="fullpreview-loading">${escapeHtml(t("loadingPreview"))}</div>`;
+    ov.classList.remove("hidden");
+
+    let blob;
+    try {
+      if (
+        state.detailFileCache &&
+        state.detailFileCache.id === doc.id &&
+        state.detailFileCache.blob
+      ) {
+        blob = state.detailFileCache.blob;
+      } else {
+        blob = await fetchDecryptedDocumentBlob(doc);
+      }
+    } catch {
+      body.innerHTML = `<p class="fullpreview-err">${escapeHtml(t("toastDownloadFail"))}</p>`;
+      return;
+    }
+
+    const mime = doc.mime_type || "";
+    if (mime.startsWith("image/")) {
+      const url = URL.createObjectURL(blob);
+      fullPreviewUrls.push(url);
+      body.innerHTML = `<div class="fullpreview-img-wrap"><img src="${url}" alt="" class="fullpreview-img" decoding="async" /></div>`;
+      return;
+    }
+    if (mime.includes("pdf")) {
+      const maxW = Math.min(
+        typeof window !== "undefined" ? window.innerWidth - 24 : 400,
+        900,
+      );
+      body.innerHTML = "";
+      if (await renderPdfDetailAllPages(blob, body, maxW)) return;
+      const V = window.FamDocVaultCrypto;
+      if (V && V.maybePdfPreviewBlob) {
+        try {
+          const jpeg = await V.maybePdfPreviewBlob(
+            new File([blob], doc.original_filename || "doc.pdf", {
+              type: "application/pdf",
+            }),
+          );
+          if (jpeg) {
+            const url = URL.createObjectURL(jpeg);
+            fullPreviewUrls.push(url);
+            body.innerHTML = `<div class="fullpreview-img-wrap"><img src="${url}" alt="" class="fullpreview-img" /></div>`;
+            return;
+          }
+        } catch (_) {
+          /* fall through */
+        }
+      }
+      const url = URL.createObjectURL(blob);
+      fullPreviewUrls.push(url);
+      body.innerHTML = detailPdfIframeHtml(url).replace(
+        "detail-preview-pdf",
+        "detail-preview-pdf fullpreview-pdf-iframe",
+      );
+      return;
+    }
+    body.innerHTML = `<p class="fullpreview-err">${escapeHtml(t("previewUnsupported"))}</p>`;
+  }
+
   function closeDetail() {
+    closeFullPreview();
     $("#detail-modal")?.classList.add("hidden");
     state.currentDetail = null;
+    state.detailFileCache = null;
     revokePreviews();
     $("#detail-preview").innerHTML = "";
   }
@@ -1672,6 +1772,17 @@
   $("#detail-close")?.addEventListener("click", closeDetail);
   $("#detail-modal")?.addEventListener("click", (e) => {
     if (e.target.id === "detail-modal") closeDetail();
+  });
+
+  $("#detail-preview-full")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void openDocumentFullPreview();
+  });
+  $("#detail-fullpreview-close")?.addEventListener("click", () => {
+    closeFullPreview();
+  });
+  $("#detail-fullpreview-overlay")?.addEventListener("click", (e) => {
+    if (e.target.id === "detail-fullpreview-overlay") closeFullPreview();
   });
 
   $("#detail-save")?.addEventListener("click", async () => {

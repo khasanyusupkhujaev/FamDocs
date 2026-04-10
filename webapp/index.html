@@ -407,6 +407,15 @@
           </button>
           <button
             type="button"
+            class="btn-detail-icon"
+            id="detail-preview-full"
+            data-i18n-title="previewFullButton"
+          >
+            <span class="btn-detail-ico" aria-hidden="true">👁</span>
+            <span data-i18n="previewFullButton"></span>
+          </button>
+          <button
+            type="button"
             class="btn-detail-delete"
             id="detail-delete"
             data-i18n-aria="deleteDoc"
@@ -416,6 +425,30 @@
           </button>
         </div>
         <button type="button" class="btn-primary wide detail-save-btn" id="detail-save" data-i18n="saveChanges"></button>
+      </div>
+    </div>
+
+    <div
+      class="detail-fullpreview-overlay hidden"
+      id="detail-fullpreview-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="detail-fullpreview-title"
+    >
+      <div class="detail-fullpreview-panel">
+        <div class="detail-fullpreview-head">
+          <h3 class="detail-fullpreview-title" id="detail-fullpreview-title"></h3>
+          <button
+            type="button"
+            class="icon-btn"
+            id="detail-fullpreview-close"
+            data-i18n-aria="closeAria"
+            aria-label=""
+          >
+            ✕
+          </button>
+        </div>
+        <div class="detail-fullpreview-body" id="detail-fullpreview-body"></div>
       </div>
     </div>
 
