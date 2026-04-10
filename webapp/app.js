@@ -148,7 +148,9 @@
       if (k) el.setAttribute("title", t(k));
     });
     const ls = $("#lang-select");
+    const vs = $("#vault-lang-select");
     if (ls) ls.value = state.lang;
+    if (vs) vs.value = state.lang;
     setBulkToggleLabel();
   }
 
@@ -160,22 +162,14 @@
   }
 
   function fillLangSelect() {
-    const sel = $("#lang-select");
-    if (!sel) return;
     const p = pack();
-    sel.innerHTML = "";
-    ["en", "uz", "ru"].forEach((code) => {
-      const o = document.createElement("option");
-      o.value = code;
-      o.textContent = p[`lang_${code}`] || code;
-      sel.appendChild(o);
-    });
-    sel.value = state.lang;
-    sel.onchange = () => {
-      state.lang = sel.value;
-      try {
-        localStorage.setItem("famdoc_lang", state.lang);
-      } catch (_) {}
+    const syncBoth = () => {
+      const ls = $("#lang-select");
+      const vs = $("#vault-lang-select");
+      if (ls) ls.value = state.lang;
+      if (vs) vs.value = state.lang;
+    };
+    const onLangChange = () => {
       applyStaticI18n();
       setFamilyHeader();
       renderSidebar();
@@ -200,6 +194,27 @@
         }
       }
     };
+    const fillOne = (sel) => {
+      if (!sel) return;
+      sel.innerHTML = "";
+      ["en", "uz", "ru"].forEach((code) => {
+        const o = document.createElement("option");
+        o.value = code;
+        o.textContent = p[`lang_${code}`] || code;
+        sel.appendChild(o);
+      });
+      sel.value = state.lang;
+      sel.onchange = () => {
+        state.lang = sel.value;
+        try {
+          localStorage.setItem("famdoc_lang", state.lang);
+        } catch (_) {}
+        syncBoth();
+        onLangChange();
+      };
+    };
+    fillOne($("#lang-select"));
+    fillOne($("#vault-lang-select"));
   }
 
   const headers = () => ({
@@ -1511,8 +1526,6 @@
         badge.className = "enc-badge";
       }
     }
-    $("#detail-more-sheet")?.classList.add("hidden");
-    $("#detail-more")?.setAttribute("aria-expanded", "false");
     $("#detail-name").value = doc.original_filename;
     $("#detail-tags").value = doc.tags || "";
     $("#detail-notes").value = doc.notes || "";
@@ -1523,10 +1536,23 @@
     prev.innerHTML = `<div class="detail-preview-frame"><div class="ph">${mimeIcon(doc.mime_type)}</div></div>`;
 
     const mime = doc.mime_type || "";
-    const loadBlob = () =>
+
+    const loadPreviewThumb = () =>
+      apiFetch(`/api/documents/${doc.id}/preview`, { headers: headers() }).then(
+        async (r) => {
+          if (!r.ok) throw new Error("no_preview");
+          let blob = await r.blob();
+          if (readCryptoHeaders(r).previewEnc) {
+            blob = await decryptPreviewBlob(doc, r, blob);
+          }
+          return blob;
+        },
+      );
+
+    const loadFullFile = () =>
       apiFetch(`/api/documents/${doc.id}/file`, { headers: headers() }).then(
         async (r) => {
-          if (!r.ok) return Promise.reject();
+          if (!r.ok) throw new Error("no_file");
           let blob = await r.blob();
           if (docIsEncrypted(doc)) {
             blob = await decryptFileBlob(doc, r, blob);
@@ -1538,52 +1564,38 @@
         },
       );
 
-    const narrowForPdf =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(max-width: 700px)").matches;
+    const showImagePreview = (blob) => {
+      const url = URL.createObjectURL(blob);
+      previewUrls.push(url);
+      prev.innerHTML = `<div class="detail-preview-frame detail-preview-image"><img src="${url}" alt="" class="detail-img" decoding="async" /></div>`;
+    };
+
+    const showPdfIframe = (blob) => {
+      const url = URL.createObjectURL(blob);
+      previewUrls.push(url);
+      prev.innerHTML = detailPdfIframeHtml(url);
+    };
 
     if (mime.startsWith("image/")) {
-      loadBlob()
-        .then((blob) => {
-          const url = URL.createObjectURL(blob);
-          previewUrls.push(url);
-          prev.innerHTML = `<div class="detail-preview-frame detail-preview-image"><img src="${url}" alt="" class="detail-img" decoding="async" /></div>`;
-        })
-        .catch(() => {});
+      loadFullFile()
+        .then(showImagePreview)
+        .catch(() => {
+          loadPreviewThumb()
+            .then(showImagePreview)
+            .catch(() => {});
+        });
     } else if (mime.includes("pdf")) {
-      const showRasterPdf =
-        narrowForPdf && doc.has_preview === true;
-      if (showRasterPdf) {
-        apiFetch(`/api/documents/${doc.id}/preview`, { headers: headers() })
-          .then(async (r) => {
-            if (!r.ok) return Promise.reject();
-            let blob = await r.blob();
-            if (readCryptoHeaders(r).previewEnc) {
-              blob = await decryptPreviewBlob(doc, r, blob);
-            }
-            return blob;
-          })
-          .then((blob) => {
-            const url = URL.createObjectURL(blob);
-            previewUrls.push(url);
-            prev.innerHTML = `<div class="detail-preview-frame detail-preview-image"><img src="${url}" alt="" class="detail-img" decoding="async" /></div>`;
-          })
+      if (doc.has_preview) {
+        loadPreviewThumb()
+          .then(showImagePreview)
           .catch(() => {
-            loadBlob()
-              .then((blob) => {
-                const url = URL.createObjectURL(blob);
-                previewUrls.push(url);
-                prev.innerHTML = detailPdfIframeHtml(url);
-              })
+            loadFullFile()
+              .then(showPdfIframe)
               .catch(() => {});
           });
       } else {
-        loadBlob()
-          .then((blob) => {
-            const url = URL.createObjectURL(blob);
-            previewUrls.push(url);
-            prev.innerHTML = detailPdfIframeHtml(url);
-          })
+        loadFullFile()
+          .then(showPdfIframe)
           .catch(() => {});
       }
     }
@@ -1591,24 +1603,12 @@
 
   function closeDetail() {
     $("#detail-modal")?.classList.add("hidden");
-    $("#detail-more-sheet")?.classList.add("hidden");
-    $("#detail-more")?.setAttribute("aria-expanded", "false");
     state.currentDetail = null;
     revokePreviews();
     $("#detail-preview").innerHTML = "";
   }
 
   $("#detail-close")?.addEventListener("click", closeDetail);
-
-  $("#detail-more")?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const sheet = $("#detail-more-sheet");
-    if (!sheet) return;
-    const wasHidden = sheet.classList.contains("hidden");
-    sheet.classList.toggle("hidden", !wasHidden);
-    const isOpen = !sheet.classList.contains("hidden");
-    $("#detail-more")?.setAttribute("aria-expanded", isOpen ? "true" : "false");
-  });
   $("#detail-modal")?.addEventListener("click", (e) => {
     if (e.target.id === "detail-modal") closeDetail();
   });
@@ -1719,29 +1719,6 @@
     } catch (err) {
       if (err && err.name === "AbortError") return;
       showToast(t("toastShareDownload"));
-    }
-  });
-
-  $("#detail-share-telegram")?.addEventListener("click", async () => {
-    const doc = state.currentDetail;
-    if (!doc) return;
-    syncInitData();
-    const r = await apiFetch(`/api/documents/${doc.id}/share-link`, { headers: headers() });
-    if (r.status === 503) {
-      showToast(t("toastShareUnavailable"));
-      return;
-    }
-    if (!r.ok) {
-      showToast(t("toastShareFail"));
-      return;
-    }
-    const j = await r.json();
-    if (tg?.openTelegramLink) {
-      tg.openTelegramLink(j.telegram_url);
-    } else if (tg?.openLink) {
-      tg.openLink(j.telegram_url);
-    } else {
-      window.open(j.telegram_url, "_blank");
     }
   });
 

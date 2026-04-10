@@ -1055,6 +1055,28 @@ body {
   box-shadow: var(--shadow-hover);
 }
 
+.vault-lang-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  max-width: 20rem;
+  margin: 0 auto 16px;
+  text-align: left;
+}
+
+.vault-lang-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.vault-lang-select {
+  min-width: 140px;
+  max-width: 55%;
+}
+
 .vault-lock-visual {
   font-size: 3rem;
   line-height: 1;
@@ -1541,24 +1563,32 @@ body {
   opacity: 0.85;
 }
 
-.btn-detail-more {
+.btn-detail-delete {
   flex: 0 0 52px;
-}
-
-.detail-more-sheet {
+  width: 52px;
+  height: 52px;
+  min-width: 52px;
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-bottom: 12px;
-  padding: 12px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-muted);
-  border: 1px solid var(--border);
-  animation: fadeIn 0.2s ease;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 14px;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  background: rgba(254, 226, 226, 0.85);
+  color: #b91c1c;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    transform 0.12s ease;
 }
 
-.detail-more-sheet.hidden {
-  display: none !important;
+.btn-detail-delete:active {
+  transform: scale(0.96);
+}
+
+.btn-detail-delete-ico {
+  font-size: 1.35rem;
+  line-height: 1;
 }
 
 .detail-save-btn {

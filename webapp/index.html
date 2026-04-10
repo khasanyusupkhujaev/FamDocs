@@ -411,18 +411,13 @@
           </button>
           <button
             type="button"
-            class="btn-detail-icon btn-detail-more"
-            id="detail-more"
-            data-i18n-aria="moreActions"
+            class="btn-detail-delete"
+            id="detail-delete"
+            data-i18n-aria="deleteDoc"
             aria-label=""
-            aria-expanded="false"
           >
-            <span class="btn-detail-ico" aria-hidden="true">⋯</span>
+            <span class="btn-detail-delete-ico" aria-hidden="true">🗑</span>
           </button>
-        </div>
-        <div class="detail-more-sheet hidden" id="detail-more-sheet" role="region" aria-label="">
-          <button type="button" class="btn-soft wide" id="detail-share-telegram" data-i18n="shareTelegram"></button>
-          <button type="button" class="btn-danger outline wide" id="detail-delete" data-i18n="deleteDoc"></button>
         </div>
         <button type="button" class="btn-primary wide detail-save-btn" id="detail-save" data-i18n="saveChanges"></button>
       </div>
@@ -441,6 +436,12 @@
 
     <div class="modal-overlay vault-fullscreen hidden" id="vault-modal" role="dialog" aria-modal="true">
       <div class="modal sheet vault-modal-card vault-unlock-card">
+        <div class="vault-lang-row">
+          <label class="vault-lang-label" for="vault-lang-select">
+            <span data-i18n="langLabel"></span>
+          </label>
+          <select id="vault-lang-select" class="lang-select vault-lang-select" aria-label="Language"></select>
+        </div>
         <div class="vault-lock-visual" aria-hidden="true">🔐</div>
         <h2 id="vault-modal-title" class="vault-modal-h2"></h2>
         <p id="vault-modal-lead" class="field-hint vault-modal-lead"></p>
