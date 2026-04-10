@@ -2304,14 +2304,19 @@
         ul.appendChild(li);
         return;
       }
+      const myRole = d.my_role || "";
+      const myId = state.telegramUserId || 0;
       (d.members || []).forEach((m) => {
         const li = document.createElement("li");
+        li.className = "family-member-item";
         const roleLabel =
           m.role === "owner"
             ? t("roleOwner")
             : m.role === "member"
               ? t("roleMember")
               : m.role;
+        const textWrap = document.createElement("div");
+        textWrap.className = "family-member-text";
         const main = document.createElement("div");
         main.className = "member-main";
         main.textContent = m.display_name
@@ -2324,8 +2329,21 @@
         } else {
           sub.textContent = tfmt("memberTelegramId", { id: m.user_id });
         }
-        li.appendChild(main);
-        li.appendChild(sub);
+        textWrap.appendChild(main);
+        textWrap.appendChild(sub);
+        li.appendChild(textWrap);
+        const canRemove =
+          myRole === "owner" &&
+          m.role !== "owner" &&
+          Number(m.user_id) !== Number(myId);
+        if (canRemove) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "btn-family-remove";
+          btn.setAttribute("data-user-id", String(m.user_id));
+          btn.textContent = t("familyRemoveMember");
+          li.appendChild(btn);
+        }
         ul.appendChild(li);
       });
     } catch {
@@ -2478,6 +2496,42 @@
   });
   $("#family-modal")?.addEventListener("click", (e) => {
     if (e.target.id === "family-modal") $("#family-modal")?.classList.add("hidden");
+  });
+
+  $("#family-members")?.addEventListener("click", async (e) => {
+    const btn = e.target.closest?.(".btn-family-remove");
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const uid = parseInt(btn.getAttribute("data-user-id") || "", 10);
+    if (!Number.isFinite(uid) || uid < 1) return;
+    const row = btn.closest("li");
+    const mainEl = row?.querySelector(".member-main");
+    let nameForConfirm = String(uid);
+    if (mainEl?.textContent) {
+      const parts = mainEl.textContent.split(" · ");
+      nameForConfirm = (parts[0] || "").trim() || nameForConfirm;
+    }
+    if (!confirm(tfmt("familyRemoveConfirm", { name: nameForConfirm }))) return;
+    const r = await apiFetch(`/api/family/members/${uid}`, {
+      method: "DELETE",
+      headers: headers(),
+    });
+    if (!r.ok) {
+      let msg = t("toastFamilyRemoveFail");
+      try {
+        const err = await r.json();
+        if (err.detail === "family_remove_forbidden") {
+          msg = t("toastFamilyRemoveForbidden");
+        }
+      } catch (_) {
+        /* ignore */
+      }
+      showToast(msg);
+      return;
+    }
+    showToast(t("toastFamilyMemberRemoved"));
+    await openFamilyModal();
   });
 
   $("#invite-generate")?.addEventListener("click", async () => {

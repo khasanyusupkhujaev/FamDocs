@@ -855,6 +855,34 @@ async def list_vault_members(vault_id: int) -> list[dict[str, Any]]:
         return [dict(r) for r in await cur.fetchall()]
 
 
+async def remove_vault_member(vault_id: int, target_user_id: int) -> tuple[bool, str]:
+    """
+    Remove a member from a vault. The vault owner row cannot be removed.
+    Returns (True, "ok") or (False, "not_found" | "cannot_remove_owner").
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """
+            SELECT role FROM vault_members
+            WHERE user_id = ? AND vault_id = ?
+            """,
+            (target_user_id, vault_id),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return False, "not_found"
+        role = (row["role"] or "").strip().lower()
+        if role == "owner":
+            return False, "cannot_remove_owner"
+        await db.execute(
+            "DELETE FROM vault_members WHERE user_id = ? AND vault_id = ?",
+            (target_user_id, vault_id),
+        )
+        await db.commit()
+    return True, "ok"
+
+
 async def user_belongs_to_vault(user_id: int, vault_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(

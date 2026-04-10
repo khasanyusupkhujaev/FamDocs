@@ -219,6 +219,12 @@ window.FamDocI18n = {
     inviteCopy: "Copy",
     roleOwner: "Owner",
     roleMember: "Member",
+    familyRemoveMember: "Remove",
+    familyRemoveConfirm:
+      "Remove {name} from this family? They will lose access to shared documents.",
+    toastFamilyMemberRemoved: "Member removed from family.",
+    toastFamilyRemoveFail: "Could not remove member.",
+    toastFamilyRemoveForbidden: "Only the storage owner can remove members.",
     memberLine: "User {id} · {role}",
     memberTelegramId: "Telegram ID: {id}",
     familyGroupOnly:
@@ -464,6 +470,12 @@ window.FamDocI18n = {
     inviteCopy: "Nusxa",
     roleOwner: "Boshliq",
     roleMember: "A’zo",
+    familyRemoveMember: "Olib tashlash",
+    familyRemoveConfirm:
+      "{name} ni oiladan chiqarilsinmi? Ular umumiy hujjatlarga kira olmaydi.",
+    toastFamilyMemberRemoved: "A’zo olib tashlandi.",
+    toastFamilyRemoveFail: "A’zoni olib bo‘lmadi.",
+    toastFamilyRemoveForbidden: "Faqat saqlam egasi a’zolarni chiqarishi mumkin.",
     memberLine: "Foydalanuvchi {id} · {role}",
     memberTelegramId: "Telegram ID: {id}",
     familyGroupOnly:
@@ -709,6 +721,12 @@ window.FamDocI18n = {
     inviteCopy: "Копировать",
     roleOwner: "Владелец",
     roleMember: "Участник",
+    familyRemoveMember: "Исключить",
+    familyRemoveConfirm:
+      "Исключить {name} из семьи? Доступ к общим документам будет закрыт.",
+    toastFamilyMemberRemoved: "Участник исключён.",
+    toastFamilyRemoveFail: "Не удалось исключить участника.",
+    toastFamilyRemoveForbidden: "Только владелец хранилища может исключать участников.",
     memberLine: "Пользователь {id} · {role}",
     memberTelegramId: "Telegram ID: {id}",
     familyGroupOnly:

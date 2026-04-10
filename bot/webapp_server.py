@@ -1016,8 +1016,17 @@ def create_webapp_app() -> FastAPI:
     @app.get("/api/family")
     async def api_family(ctx: InitContext = VaultOK):
         if ctx.mode != "private":
-            return {"mode": ctx.mode, "members": [], "family_features": False}
+            return {
+                "mode": ctx.mode,
+                "members": [],
+                "family_features": False,
+                "my_role": None,
+            }
         members = await db.list_vault_members(ctx.vault_id)
+        mem = await db.get_vault_membership(ctx.user_id)
+        my_role = None
+        if mem and int(mem["vault_id"]) == ctx.vault_id:
+            my_role = mem.get("role")
         out: list[dict] = []
         for m in members:
             uid = int(m["user_id"])
@@ -1038,6 +1047,7 @@ def create_webapp_app() -> FastAPI:
             "family_features": True,
             "vault_id": ctx.vault_id,
             "members": out,
+            "my_role": my_role,
         }
 
     @app.post("/api/family/invite")
@@ -1079,6 +1089,33 @@ def create_webapp_app() -> FastAPI:
         if not ok:
             raise HTTPException(status_code=400, detail=reason)
         return {"ok": True, "reason": reason}
+
+    @app.delete("/api/family/members/{target_user_id}")
+    async def api_family_remove_member(
+        target_user_id: int,
+        ctx: InitContext = VaultOK,
+    ):
+        if ctx.mode != "private":
+            raise HTTPException(
+                status_code=400, detail="family_remove_private_only"
+            )
+        if target_user_id < 1:
+            raise HTTPException(status_code=400, detail="invalid_user_id")
+        if target_user_id == ctx.user_id:
+            raise HTTPException(status_code=400, detail="family_remove_self")
+        actor = await db.get_vault_membership(ctx.user_id)
+        if not actor or int(actor["vault_id"]) != ctx.vault_id:
+            raise HTTPException(status_code=403, detail="family_remove_forbidden")
+        if (actor.get("role") or "").strip().lower() != "owner":
+            raise HTTPException(status_code=403, detail="family_remove_forbidden")
+        ok, reason = await db.remove_vault_member(ctx.vault_id, target_user_id)
+        if not ok:
+            if reason == "not_found":
+                raise HTTPException(status_code=404, detail=reason)
+            if reason == "cannot_remove_owner":
+                raise HTTPException(status_code=400, detail=reason)
+            raise HTTPException(status_code=400, detail=reason)
+        return {"ok": True}
 
     @app.post("/api/billing/manual-claim")
     async def api_manual_claim(
