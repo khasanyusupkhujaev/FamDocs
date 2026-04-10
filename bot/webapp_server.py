@@ -354,6 +354,7 @@ def create_webapp_app() -> FastAPI:
         "style-src 'self'; "
         "img-src 'self' blob: data:; "
         "connect-src 'self'; "
+        "worker-src 'self' blob:; "
         "object-src 'none'; "
         "base-uri 'self'; "
         "frame-src 'self' blob:; "
@@ -937,26 +938,19 @@ def create_webapp_app() -> FastAPI:
 
     @app.get("/api/shared/documents/{doc_id}")
     async def api_shared_document(
-        request: Request,
         doc_id: int,
         vault_id: int,
         exp: int,
         sig: str,
-        tgWebAppData: str | None = Query(None),
-        x_telegram_init_data: str | None = Header(None, alias="X-Telegram-Init-Data"),
     ):
+        """
+        Time-limited signed URL for sharing outside the Mini App (e.g. t.me/share/url).
+        Signature binds vault_id, doc_id, expiry — no Telegram initData or vault cookie.
+        E2E-encrypted files are returned as stored (ciphertext + crypto headers); recipients
+        need the vault key to decrypt (same as before plaintext-only sharing worked for raw files).
+        """
         if not verify_file_share(doc_id, vault_id, exp, sig):
             raise HTTPException(status_code=404, detail="Invalid or expired link")
-        raw = (x_telegram_init_data or "").strip() or (tgWebAppData or "").strip()
-        if not raw:
-            raise HTTPException(
-                status_code=401,
-                detail="telegram_auth_required",
-            )
-        ctx = await _init_context_from_raw(raw)
-        if int(vault_id) != int(ctx.vault_id):
-            raise HTTPException(status_code=403, detail="vault_mismatch")
-        await _ensure_vault_unlocked(request, ctx)
         meta = await db.get_document(vault_id, doc_id)
         if not meta:
             raise HTTPException(status_code=404, detail="Not found")

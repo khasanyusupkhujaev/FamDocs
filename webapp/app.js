@@ -324,12 +324,15 @@
     const V = window.FamDocVaultCrypto;
     const key = await getVaultAesKey();
     if (!V || !key) throw new Error("no_vault_key");
-    const ab = await plainBlob.arrayBuffer();
-    const { ivB64, tagB64, ciphertext } = await V.encryptBuffer(key, ab);
     const file = new File([plainBlob], name, {
       type: mime || "application/octet-stream",
     });
-    const prevBlob = await V.maybeImagePreviewBlob(file, mime || "");
+    let prevBlob = await V.maybeImagePreviewBlob(file, mime || "");
+    if (!prevBlob && V.maybePdfPreviewBlob) {
+      prevBlob = await V.maybePdfPreviewBlob(file);
+    }
+    const ab = await plainBlob.arrayBuffer();
+    const { ivB64, tagB64, ciphertext } = await V.encryptBuffer(key, ab);
     let previewIv = "";
     let previewTag = "";
     let previewBlob = null;
@@ -389,9 +392,12 @@
     const V = window.FamDocVaultCrypto;
     const key = await getVaultAesKey();
     if (!V || !key) throw new Error("no_vault_key");
+    let prevBlob = await V.maybeImagePreviewBlob(file, file.type || "");
+    if (!prevBlob && V.maybePdfPreviewBlob) {
+      prevBlob = await V.maybePdfPreviewBlob(file);
+    }
     const ab = await file.arrayBuffer();
     const { ivB64, tagB64, ciphertext } = await V.encryptBuffer(key, ab);
-    const prevBlob = await V.maybeImagePreviewBlob(file, file.type || "");
     let previewIv = "";
     let previewTag = "";
     let previewBlob = null;

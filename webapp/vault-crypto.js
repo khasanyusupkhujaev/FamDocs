@@ -130,11 +130,44 @@
     }
   }
 
+  /** First page of a PDF → JPEG (for E2E upload preview). Requires pdf.min.js (pdfjsLib). */
+  async function maybePdfPreviewBlob(file) {
+    const mime = (file && file.type) || "";
+    const name = (file && file.name) || "";
+    if (!mime.includes("pdf") && !/\.pdf$/i.test(name)) return null;
+    const pdfjsLib = globalThis.pdfjsLib;
+    if (!pdfjsLib || typeof pdfjsLib.getDocument !== "function") return null;
+    try {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "/static/pdf.worker.min.js";
+      const ab = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
+      const page = await pdf.getPage(1);
+      const baseVp = page.getViewport({ scale: 1 });
+      const maxW = 480;
+      const scale = baseVp.width > maxW ? maxW / baseVp.width : 1;
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return null;
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const task = page.render({ canvasContext: ctx, viewport });
+      await task.promise;
+      const blob = await new Promise((res) =>
+        canvas.toBlob((b) => res(b), "image/jpeg", 0.82),
+      );
+      return blob;
+    } catch {
+      return null;
+    }
+  }
+
   window.FamDocVaultCrypto = {
     deriveAesKey,
     encryptBuffer,
     decryptBuffer,
     maybeImagePreviewBlob,
+    maybePdfPreviewBlob,
     bytesToB64,
     b64ToBytes,
   };
