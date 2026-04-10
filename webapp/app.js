@@ -9,8 +9,31 @@
   if (tg) {
     tg.ready();
     tg.expand();
-    if (tg.setHeaderColor) tg.setHeaderColor("#e8f4fc");
-    if (tg.setBackgroundColor) tg.setBackgroundColor("#f0f7fb");
+  }
+
+  function applyTelegramTheme() {
+    const tp = tg?.themeParams;
+    const root = document.documentElement;
+    if (!tp || !root) return;
+    const hex = (c) => {
+      if (!c || typeof c !== "string") return "";
+      return c.startsWith("#") ? c : "#" + c;
+    };
+    const bg = hex(tp.bg_color);
+    const tc = hex(tp.text_color);
+    const hc = hex(tp.hint_color);
+    const lc = hex(tp.link_color);
+    const bc = hex(tp.button_color);
+    if (bg) {
+      root.style.setProperty("--tg-bg", bg);
+      if (tg.setBackgroundColor) tg.setBackgroundColor(bg);
+    }
+    if (tc) root.style.setProperty("--tg-text", tc);
+    if (hc) root.style.setProperty("--tg-hint", hc);
+    if (lc) root.style.setProperty("--tg-link", lc);
+    if (bc) root.style.setProperty("--tg-button", bc);
+    const headerBg = bg || "#f4f8fb";
+    if (tg.setHeaderColor) tg.setHeaderColor(headerBg);
   }
 
   /**
@@ -116,8 +139,24 @@
       const k = el.getAttribute("data-i18n-placeholder");
       if (k) el.placeholder = t(k);
     });
+    document.querySelectorAll("[data-i18n-aria]").forEach((el) => {
+      const k = el.getAttribute("data-i18n-aria");
+      if (k) el.setAttribute("aria-label", t(k));
+    });
+    document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+      const k = el.getAttribute("data-i18n-title");
+      if (k) el.setAttribute("title", t(k));
+    });
     const ls = $("#lang-select");
     if (ls) ls.value = state.lang;
+    setBulkToggleLabel();
+  }
+
+  function setBulkToggleLabel() {
+    const el = $("#bulk-toggle-label");
+    if (el) {
+      el.textContent = state.bulkMode ? t("bulkModeExit") : t("bulkModeEnter");
+    }
   }
 
   function fillLangSelect() {
@@ -140,6 +179,7 @@
       applyStaticI18n();
       setFamilyHeader();
       renderSidebar();
+      renderCategoryChips();
       fillCategorySelects();
       updateBulkBar();
       if (
@@ -392,6 +432,52 @@
     return d.innerHTML;
   }
 
+  /** Highlight search query in plain text; returns safe HTML. */
+  function highlightHtml(text, q) {
+    const query = (q || "").trim();
+    if (!query) return escapeHtml(text ?? "");
+    const s = String(text ?? "");
+    let re;
+    try {
+      re = new RegExp(
+        `(${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`,
+        "gi",
+      );
+    } catch {
+      return escapeHtml(s);
+    }
+    const parts = s.split(re);
+    return parts
+      .map((part, i) => {
+        if (i % 2 === 1) {
+          return `<mark class="search-hit">${escapeHtml(part)}</mark>`;
+        }
+        return escapeHtml(part);
+      })
+      .join("");
+  }
+
+  function renderDocSkeletons(n = 7) {
+    const grid = $("#doc-grid");
+    if (!grid) return;
+    grid.innerHTML = "";
+    for (let i = 0; i < n; i++) {
+      const card = document.createElement("div");
+      card.className = "doc-card doc-card--skeleton";
+      card.setAttribute("aria-hidden", "true");
+      card.innerHTML = `
+        <div class="doc-thumb"><div class="sk-line" style="width:36px;height:36px;border-radius:10px;margin:auto"></div></div>
+        <div class="doc-card-body">
+          <div class="sk-line" style="width:88%"></div>
+          <div class="sk-line" style="width:62%"></div>
+          <div class="sk-line" style="width:44%"></div>
+        </div>`;
+      grid.appendChild(card);
+    }
+  }
+
+  let loadDocumentsGen = 0;
+
   async function apiConfig() {
     const r = await apiFetch("/api/config", {
       headers: { "ngrok-skip-browser-warning": "69420" },
@@ -440,7 +526,7 @@
     const nameEl = $("#family-name");
     const metaEl = $("#family-meta");
     if (!nameEl || !metaEl) return;
-    const title = t("headerTitle");
+    const title = t("brandTitle");
     const ctype = (ch?.type || "").toLowerCase();
     const isGroup =
       ctype === "group" || ctype === "supergroup" || ctype === "channel";
@@ -501,6 +587,58 @@
       });
       nav.appendChild(b);
     });
+
+    renderCategoryChips();
+  }
+
+  function renderCategoryChips() {
+    const wrap = $("#category-chips");
+    if (!wrap) return;
+    wrap.innerHTML = "";
+    const mk = (id, label, count, emoji) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className =
+        "category-chip" + (state.activeCategory === id ? " is-active" : "");
+      b.setAttribute("role", "tab");
+      b.setAttribute(
+        "aria-selected",
+        state.activeCategory === id ? "true" : "false",
+      );
+      const n = typeof count === "number" ? count : "";
+      const prefix = emoji ? `${emoji} ` : "";
+      b.textContent = n !== "" ? `${prefix}${label} (${n})` : `${prefix}${label}`;
+      b.addEventListener("click", () => {
+        state.activeCategory = id;
+        renderSidebar();
+        renderCategoryChips();
+        loadDocuments();
+        closeSidebarMobile();
+      });
+      wrap.appendChild(b);
+    };
+    mk("all", t("allDocuments"), state.total, "📚");
+    state.categories.forEach((c) => mk(c.id, tCat(c.id), c.count, c.emoji));
+  }
+
+  function updateVaultPill() {
+    const pill = $("#btn-vault-status");
+    const ico = $("#vault-pill-ico");
+    const lab = $("#vault-pill-label");
+    if (!pill || !lab) return;
+    if (state.vaultState === "none") {
+      pill.classList.remove("is-locked", "is-unlocked");
+      if (ico) ico.textContent = "🔐";
+      lab.textContent = t("vaultPillSetup");
+      pill.setAttribute("aria-pressed", "false");
+      return;
+    }
+    const locked = !vaultMemoryAesKey;
+    pill.classList.toggle("is-locked", locked);
+    pill.classList.toggle("is-unlocked", !locked);
+    if (ico) ico.textContent = locked ? "🔒" : "✓";
+    lab.textContent = locked ? t("vaultStatusLocked") : t("vaultStatusUnlocked");
+    pill.setAttribute("aria-pressed", locked ? "true" : "false");
   }
 
   function closeSidebarMobile() {
@@ -549,23 +687,36 @@
   async function loadDocuments() {
     const grid = $("#doc-grid");
     const empty = $("#doc-empty");
+    const noRes = $("#doc-no-results");
     if (!initData) {
       grid.innerHTML = "";
       empty.classList.remove("hidden");
+      noRes?.classList.add("hidden");
       return;
     }
+    const gen = ++loadDocumentsGen;
+    renderDocSkeletons(8);
+    empty.classList.add("hidden");
+    noRes?.classList.add("hidden");
     let data;
     try {
       data = await apiDocuments();
     } catch {
+      if (gen !== loadDocumentsGen) return;
       showToast(t("toastDocuments"));
+      grid.innerHTML = "";
       return;
     }
+    if (gen !== loadDocumentsGen) return;
     const items = data.items || [];
+    const q = state.searchQ.trim();
+    const hasQuery = q.length > 0;
     revokeListThumbs();
     revokePreviews();
     grid.innerHTML = "";
-    empty.classList.toggle("hidden", items.length > 0);
+
+    empty.classList.toggle("hidden", items.length > 0 || hasQuery);
+    noRes?.classList.toggle("hidden", items.length > 0 || !hasQuery);
 
     items.forEach((doc) => {
       const card = document.createElement("article");
@@ -588,37 +739,61 @@
         card.appendChild(cb);
       }
 
-      const lock = document.createElement("span");
-      lock.className = "lock-mini";
-      lock.title = t("storedSecurely");
-      lock.textContent = "🔒";
-      card.appendChild(lock);
+      if (docIsEncrypted(doc)) {
+        const lock = document.createElement("span");
+        lock.className = "lock-mini";
+        lock.title = t("storedSecurely");
+        lock.textContent = "🔒";
+        card.appendChild(lock);
+      }
 
       const thumb = document.createElement("div");
       thumb.className = "doc-thumb";
       thumb.textContent = mimeIcon(doc.mime_type);
       loadThumbForCard(thumb, doc);
 
+      const body = document.createElement("div");
+      body.className = "doc-card-body";
+
       const title = document.createElement("div");
       title.className = "doc-title";
-      title.textContent = doc.original_filename;
+      title.innerHTML = highlightHtml(doc.original_filename, q);
 
       const meta = document.createElement("div");
       meta.className = "doc-meta";
       meta.textContent = `${doc.emoji} ${tCat(doc.category)} · ${formatDate(doc.uploaded_at)}`;
 
-      const tags = document.createElement("div");
-      tags.className = "doc-tags";
-      tags.textContent = doc.tags
-        ? "🏷 " + doc.tags
-        : doc.notes
-          ? "📝 " + doc.notes.slice(0, 60) + (doc.notes.length > 60 ? "…" : "")
-          : "";
+      body.appendChild(title);
+      body.appendChild(meta);
+
+      const tagStr = (doc.tags || "").trim();
+      if (tagStr) {
+        const tagsRow = document.createElement("div");
+        tagsRow.className = "doc-tags-row";
+        tagStr
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .slice(0, 5)
+          .forEach((tag) => {
+            const chip = document.createElement("span");
+            chip.className = "tag-chip";
+            chip.innerHTML = highlightHtml(tag, q);
+            tagsRow.appendChild(chip);
+          });
+        body.appendChild(tagsRow);
+      } else if (doc.notes && doc.notes.trim()) {
+        const hint = document.createElement("div");
+        hint.className = "doc-meta";
+        hint.style.marginTop = "2px";
+        const snip =
+          doc.notes.length > 72 ? doc.notes.slice(0, 72) + "…" : doc.notes;
+        hint.innerHTML = highlightHtml(snip, q);
+        body.appendChild(hint);
+      }
 
       card.appendChild(thumb);
-      card.appendChild(title);
-      card.appendChild(meta);
-      if (tags.textContent) card.appendChild(tags);
+      card.appendChild(body);
 
       card.addEventListener("click", () => {
         if (state.bulkMode) {
@@ -642,6 +817,7 @@
     const el = $("#bulk-count");
     if (el) el.textContent = tfmt("bulkSelected", { n });
     bar?.classList.toggle("hidden", !state.bulkMode);
+    setBulkToggleLabel();
   }
 
   async function loadCategoryLabels() {
@@ -667,7 +843,7 @@
   }
 
   function updateAddDocButton() {
-    const btn = $("#btn-add-doc");
+    const btn = $("#fab-upload");
     if (!btn) return;
     const at = atDocumentLimit();
     const canPurchase = at && state.billingUpgrade;
@@ -838,6 +1014,7 @@
     renderSidebar();
     setFamilyHeader();
     updateAddDocButton();
+    updateVaultPill();
   }
 
   let vaultModalMode = "unlock";
@@ -850,8 +1027,10 @@
     const p2 = $("#vault-pass-2");
     const p2lab = $("#vault-pass-2-label");
     const sub = $("#vault-modal-submit");
+    const e2e = $("#vault-e2e-subtext");
     if (!m || !titleEl || !lead || !p2 || !sub) return;
     m.classList.remove("hidden");
+    if (e2e) e2e.classList.toggle("hidden", mode !== "unlock");
     $("#vault-pass-1").value = "";
     $("#vault-pass-2").value = "";
     $("#vault-modal-err").hidden = true;
@@ -955,6 +1134,7 @@
   });
 
   async function boot() {
+    applyTelegramTheme();
     fillLangSelect();
     applyStaticI18n();
 
@@ -979,6 +1159,7 @@
 
     try {
       await refreshBootstrap();
+      updateVaultPill();
       await runVaultGate();
       if (!$("#vault-modal")?.classList.contains("hidden")) return;
       await loadDocuments();
@@ -987,12 +1168,19 @@
     }
   }
 
+  window.addEventListener("pageshow", () => {
+    updateVaultPill();
+  });
+
   $("#search-input")?.addEventListener("input", (e) => {
     clearTimeout(state.searchTimer);
     state.searchTimer = setTimeout(() => {
       state.searchQ = e.target.value;
-      loadDocuments();
-    }, 320);
+      $("#search-wrap")?.classList.add("is-loading");
+      loadDocuments().finally(() => {
+        $("#search-wrap")?.classList.remove("is-loading");
+      });
+    }, 120);
   });
 
   $("#menu-toggle")?.addEventListener("click", openSidebarMobile);
@@ -1081,7 +1269,35 @@
     $("#btn-upload-run")?.classList.remove("hidden");
   }
 
-  $("#btn-add-doc")?.addEventListener("click", openUploadPanel);
+  $("#fab-upload")?.addEventListener("click", openUploadPanel);
+
+  $("#btn-vault-status")?.addEventListener("click", () => {
+    void runVaultGate();
+  });
+
+  $("#btn-more-menu")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const pop = $("#more-menu-popover");
+    const btn = $("#btn-more-menu");
+    if (!pop || !btn) return;
+    const wasHidden = pop.classList.contains("hidden");
+    pop.classList.toggle("hidden", !wasHidden);
+    const isOpen = !pop.classList.contains("hidden");
+    btn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+  });
+
+  $("#more-menu-popover")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+  });
+
+  document.addEventListener("click", () => {
+    const pop = $("#more-menu-popover");
+    const btn = $("#btn-more-menu");
+    if (pop && !pop.classList.contains("hidden")) {
+      pop.classList.add("hidden");
+      btn?.setAttribute("aria-expanded", "false");
+    }
+  });
   $("#upload-close")?.addEventListener("click", closeUploadPanel);
 
   $("#file-input")?.addEventListener("change", (e) => {
@@ -1274,6 +1490,23 @@
   function openDetail(doc) {
     state.currentDetail = doc;
     $("#detail-modal")?.classList.remove("hidden");
+    const dateEl = $("#detail-meta-date");
+    if (dateEl) dateEl.textContent = formatDate(doc.uploaded_at);
+    const badge = $("#detail-enc-badge");
+    if (badge) {
+      if (docIsEncrypted(doc)) {
+        badge.textContent = t("detailEncEncrypted");
+        badge.className = "enc-badge enc-badge--secure";
+      } else if (isLegacyPlaintext(doc)) {
+        badge.textContent = t("detailEncLegacy");
+        badge.className = "enc-badge enc-badge--legacy";
+      } else {
+        badge.textContent = t("detailEncPlain");
+        badge.className = "enc-badge";
+      }
+    }
+    $("#detail-more-sheet")?.classList.add("hidden");
+    $("#detail-more")?.setAttribute("aria-expanded", "false");
     $("#detail-name").value = doc.original_filename;
     $("#detail-tags").value = doc.tags || "";
     $("#detail-notes").value = doc.notes || "";
@@ -1352,12 +1585,24 @@
 
   function closeDetail() {
     $("#detail-modal")?.classList.add("hidden");
+    $("#detail-more-sheet")?.classList.add("hidden");
+    $("#detail-more")?.setAttribute("aria-expanded", "false");
     state.currentDetail = null;
     revokePreviews();
     $("#detail-preview").innerHTML = "";
   }
 
   $("#detail-close")?.addEventListener("click", closeDetail);
+
+  $("#detail-more")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const sheet = $("#detail-more-sheet");
+    if (!sheet) return;
+    const wasHidden = sheet.classList.contains("hidden");
+    sheet.classList.toggle("hidden", !wasHidden);
+    const isOpen = !sheet.classList.contains("hidden");
+    $("#detail-more")?.setAttribute("aria-expanded", isOpen ? "true" : "false");
+  });
   $("#detail-modal")?.addEventListener("click", (e) => {
     if (e.target.id === "detail-modal") closeDetail();
   });
@@ -1515,6 +1760,8 @@
     state.bulkMode = !state.bulkMode;
     state.selection.clear();
     $("#bulk-toggle")?.classList.toggle("active", state.bulkMode);
+    $("#more-menu-popover")?.classList.add("hidden");
+    $("#btn-more-menu")?.setAttribute("aria-expanded", "false");
     updateBulkBar();
     loadDocuments();
   });
