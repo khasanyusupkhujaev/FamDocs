@@ -54,10 +54,10 @@ async def cmd_admin(message: Message) -> None:
         return
     await message.answer(
         "<b>FamDoc admin</b>\n"
-        "/stats — registered users and upload activity\n"
-        "/grant &lt;telegram_user_id&gt; &lt;slots&gt; — add document slots after you "
-        "verify bank payment (user puts <code>FAMDOC-&lt;their id&gt;</code> in the "
-        "transfer comment).",
+        "/stats — registered users, uploads, Mini App opens\n"
+        "/grant &lt;telegram_user_id&gt; &lt;slots&gt; — add slots after you verify "
+        "payment (users upload a receipt in the Mini App; also use the web "
+        "<code>/admin</code> dashboard if configured).",
         parse_mode="HTML",
     )
 
@@ -77,7 +77,8 @@ async def cmd_stats(message: Message) -> None:
         "<b>Statistics</b>\n"
         f"Users (vault memberships): <b>{s['users_registered']}</b>\n"
         f"Vaults with at least one document: <b>{s['vaults_with_uploads']}</b>\n"
-        f"Total documents: <b>{s['total_documents']}</b>"
+        f"Total documents: <b>{s['total_documents']}</b>\n"
+        f"Mini App opens (bootstrap count): <b>{s.get('miniapp_opens', 0)}</b>"
         + cap_note,
         parse_mode="HTML",
     )

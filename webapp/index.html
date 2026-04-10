@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
     <meta name="theme-color" content="#e8f4fc" />
     <title>FamDocs</title>
@@ -242,10 +242,19 @@
                 <input type="text" readonly id="billing-payment-ref" class="field-input mono" />
                 <button type="button" class="btn-soft" id="btn-copy-ref" data-i18n="billingManualCopyComment"></button>
               </div>
-              <p class="field-label" data-i18n="billingQrLabel"></p>
-              <div class="billing-qr-wrap">
-                <img id="billing-qr-img" alt="" width="200" height="200" decoding="async" />
+              <label class="field-label" data-i18n="billingReceiptLabel"></label>
+              <p class="field-hint" data-i18n="billingReceiptHint"></p>
+              <input
+                type="file"
+                id="billing-receipt-input"
+                class="hidden"
+                accept="image/*,application/pdf"
+              />
+              <div class="billing-receipt-row">
+                <button type="button" class="btn-soft" id="btn-billing-receipt-pick" data-i18n="billingReceiptChoose"></button>
+                <span class="billing-receipt-filename" id="billing-receipt-filename"></span>
               </div>
+              <div id="billing-receipt-preview" class="billing-receipt-preview hidden"></div>
               <button type="button" class="btn-primary wide" id="btn-billing-i-paid" data-i18n="billingIPaid"></button>
               <p class="field-hint billing-foot" data-i18n="billingManualAfterPay"></p>
             </div>

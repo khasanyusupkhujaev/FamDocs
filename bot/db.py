@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from bot.config import DB_PATH
+from bot.storage import remove_stored_file
 
 
 DOCUMENTS_DDL = """
@@ -131,9 +132,37 @@ async def _migrate_schema(db: aiosqlite.Connection) -> None:
             username TEXT,
             price_uzs INTEGER NOT NULL,
             slots_requested INTEGER NOT NULL,
-            claimed_at TEXT NOT NULL
+            claimed_at TEXT NOT NULL,
+            vault_id INTEGER NOT NULL DEFAULT 0,
+            receipt_stored_filename TEXT NOT NULL DEFAULT '',
+            receipt_mime TEXT NOT NULL DEFAULT ''
         )
         """
+    )
+    cur_mpc = await db.execute("PRAGMA table_info(manual_payment_claims)")
+    mpc_cols = {r[1] for r in await cur_mpc.fetchall()}
+    if mpc_cols and "vault_id" not in mpc_cols:
+        await db.execute(
+            "ALTER TABLE manual_payment_claims ADD COLUMN vault_id INTEGER NOT NULL DEFAULT 0"
+        )
+    if mpc_cols and "receipt_stored_filename" not in mpc_cols:
+        await db.execute(
+            "ALTER TABLE manual_payment_claims ADD COLUMN receipt_stored_filename TEXT NOT NULL DEFAULT ''"
+        )
+    if mpc_cols and "receipt_mime" not in mpc_cols:
+        await db.execute(
+            "ALTER TABLE manual_payment_claims ADD COLUMN receipt_mime TEXT NOT NULL DEFAULT ''"
+        )
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_analytics (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            bootstrap_count INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    await db.execute(
+        "INSERT OR IGNORE INTO app_analytics (id, bootstrap_count) VALUES (1, 0)"
     )
 
 
@@ -143,6 +172,18 @@ async def init_db() -> None:
         await db.executescript(SCHEMA)
         await _ensure_family_tables(db)
         await _migrate_schema(db)
+        await db.commit()
+
+
+async def increment_bootstrap_count() -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO app_analytics (id, bootstrap_count) VALUES (1, 1)
+            ON CONFLICT(id) DO UPDATE SET
+                bootstrap_count = bootstrap_count + 1
+            """
+        )
         await db.commit()
 
 
@@ -385,29 +426,64 @@ async def upsert_manual_payment_claim(
     username: str | None,
     price_uzs: int,
     slots_requested: int,
+    vault_id: int,
+    receipt_stored_filename: str,
+    receipt_mime: str,
 ) -> None:
-    """User tapped «I paid» for manual bank transfer; upsert pending row for admin."""
+    """User submitted payment proof for manual bank transfer; upsert pending row for admin."""
     now = datetime.now(timezone.utc).isoformat()
     fn = (first_name or "").strip()
     ln = (last_name or "").strip()
     un = (username or "").strip() or None
+    rfn = (receipt_stored_filename or "").strip()
+    rmt = (receipt_mime or "").strip()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
             INSERT INTO manual_payment_claims
-            (user_id, first_name, last_name, username, price_uzs, slots_requested, claimed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (user_id, first_name, last_name, username, price_uzs, slots_requested,
+             claimed_at, vault_id, receipt_stored_filename, receipt_mime)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 first_name = excluded.first_name,
                 last_name = excluded.last_name,
                 username = excluded.username,
                 price_uzs = excluded.price_uzs,
                 slots_requested = excluded.slots_requested,
-                claimed_at = excluded.claimed_at
+                claimed_at = excluded.claimed_at,
+                vault_id = excluded.vault_id,
+                receipt_stored_filename = excluded.receipt_stored_filename,
+                receipt_mime = excluded.receipt_mime
             """,
-            (user_id, fn, ln, un, price_uzs, slots_requested, now),
+            (
+                user_id,
+                fn,
+                ln,
+                un,
+                price_uzs,
+                slots_requested,
+                now,
+                vault_id,
+                rfn,
+                rmt,
+            ),
         )
         await db.commit()
+
+
+async def get_manual_payment_claim(telegram_user_id: int) -> dict[str, Any] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """
+            SELECT user_id, first_name, last_name, username, price_uzs, slots_requested,
+                   claimed_at, vault_id, receipt_stored_filename, receipt_mime
+            FROM manual_payment_claims WHERE user_id = ?
+            """,
+            (telegram_user_id,),
+        )
+        row = await cur.fetchone()
+    return dict(row) if row else None
 
 
 async def list_manual_payment_claims() -> list[dict[str, Any]]:
@@ -415,7 +491,8 @@ async def list_manual_payment_claims() -> list[dict[str, Any]]:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """
-            SELECT user_id, first_name, last_name, username, price_uzs, slots_requested, claimed_at
+            SELECT user_id, first_name, last_name, username, price_uzs, slots_requested,
+                   claimed_at, vault_id, receipt_stored_filename, receipt_mime
             FROM manual_payment_claims
             ORDER BY claimed_at DESC
             """
@@ -430,6 +507,12 @@ async def list_manual_payment_claims() -> list[dict[str, Any]]:
 
 async def delete_manual_payment_claim(telegram_user_id: int) -> None:
     """Remove pending claim after admin grants slots (or reconciliation)."""
+    row = await get_manual_payment_claim(telegram_user_id)
+    if row:
+        vid = int(row.get("vault_id") or 0)
+        rfn = (row.get("receipt_stored_filename") or "").strip()
+        if vid and rfn:
+            await remove_stored_file(vid, rfn)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "DELETE FROM manual_payment_claims WHERE user_id = ?",
@@ -455,10 +538,17 @@ async def admin_statistics() -> dict[str, int]:
         row = await cur.fetchone()
         vaults_with_uploads = int(row[0]) if row else 0
 
+        cur = await db.execute(
+            "SELECT bootstrap_count FROM app_analytics WHERE id = 1"
+        )
+        row = await cur.fetchone()
+        miniapp_opens = int(row[0]) if row and row[0] is not None else 0
+
     return {
         "users_registered": users_registered,
         "vaults_with_uploads": vaults_with_uploads,
         "total_documents": total_documents,
+        "miniapp_opens": miniapp_opens,
     }
 
 

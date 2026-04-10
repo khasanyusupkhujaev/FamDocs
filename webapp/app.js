@@ -70,6 +70,8 @@
     billingManual: null,
     manualSelectedTier: null,
     isAdmin: false,
+    billingReceiptBlobUrl: null,
+    adminClaimUrls: [],
   };
 
   function pack() {
@@ -503,6 +505,53 @@
     }
   }
 
+  function revokeBillingReceiptPreview() {
+    if (state.billingReceiptBlobUrl) {
+      URL.revokeObjectURL(state.billingReceiptBlobUrl);
+      state.billingReceiptBlobUrl = null;
+    }
+  }
+
+  function clearBillingReceipt() {
+    revokeBillingReceiptPreview();
+    const inp = $("#billing-receipt-input");
+    const fn = $("#billing-receipt-filename");
+    const prev = $("#billing-receipt-preview");
+    if (inp) inp.value = "";
+    if (fn) fn.textContent = "";
+    if (prev) {
+      prev.innerHTML = "";
+      prev.classList.add("hidden");
+    }
+  }
+
+  function onBillingReceiptFileChange() {
+    const inp = $("#billing-receipt-input");
+    const file = inp?.files?.[0];
+    const fn = $("#billing-receipt-filename");
+    const prev = $("#billing-receipt-preview");
+    revokeBillingReceiptPreview();
+    if (!file) {
+      if (fn) fn.textContent = "";
+      if (prev) {
+        prev.innerHTML = "";
+        prev.classList.add("hidden");
+      }
+      return;
+    }
+    if (fn) fn.textContent = file.name || "";
+    if (!prev) return;
+    prev.innerHTML = "";
+    prev.classList.remove("hidden");
+    if ((file.type || "").startsWith("image/")) {
+      const url = URL.createObjectURL(file);
+      state.billingReceiptBlobUrl = url;
+      prev.innerHTML = `<img src="${url}" alt="" />`;
+    } else {
+      prev.innerHTML = `<p class="field-hint">${escapeHtml(t("billingReceiptPdfPicked"))}</p>`;
+    }
+  }
+
   function renderManualTierButtons() {
     const wrap = $("#billing-tier-buttons");
     if (!wrap) return;
@@ -525,15 +574,13 @@
     state.manualSelectedTier = null;
     $("#billing-step-pick")?.classList.remove("hidden");
     $("#billing-step-pay")?.classList.add("hidden");
-    const qr = $("#billing-qr-img");
-    if (qr) {
-      qr.removeAttribute("src");
-    }
+    clearBillingReceipt();
     renderManualTierButtons();
   }
 
   function showManualPayStep(tier) {
     state.manualSelectedTier = tier;
+    clearBillingReceipt();
     $("#billing-step-pick")?.classList.add("hidden");
     $("#billing-step-pay")?.classList.remove("hidden");
     const m = state.billingManual || {};
@@ -561,12 +608,6 @@
       }
     }
     syncInitData();
-    const qr = $("#billing-qr-img");
-    if (qr && initData) {
-      qr.src = `/api/billing/payment-qr?amount_uzs=${encodeURIComponent(
-        String(tier.price_uzs),
-      )}&tgWebAppData=${encodeURIComponent(initData)}`;
-    }
   }
 
   function fillManualBilling() {
@@ -738,7 +779,7 @@
     $("#billing-manual-flow")?.classList.add("hidden");
     $("#billing-step-pay")?.classList.add("hidden");
     $("#billing-step-pick")?.classList.remove("hidden");
-    $("#billing-qr-img")?.removeAttribute("src");
+    clearBillingReceipt();
     $("#btn-upload-run")?.classList.remove("hidden");
   }
 
@@ -912,7 +953,7 @@
     $("#detail-category").value = doc.category;
     const prev = $("#detail-preview");
     revokePreviews();
-    prev.innerHTML = `<div class="ph">${mimeIcon(doc.mime_type)}</div>`;
+    prev.innerHTML = `<div class="detail-preview-frame"><div class="ph">${mimeIcon(doc.mime_type)}</div></div>`;
 
     const mime = doc.mime_type || "";
     const loadBlob = () =>
@@ -925,7 +966,7 @@
         .then((blob) => {
           const url = URL.createObjectURL(blob);
           previewUrls.push(url);
-          prev.innerHTML = `<img src="${url}" alt="" class="detail-img" />`;
+          prev.innerHTML = `<div class="detail-preview-frame"><img src="${url}" alt="" class="detail-img" /></div>`;
         })
         .catch(() => {});
     } else if (mime.includes("pdf")) {
@@ -933,7 +974,7 @@
         .then((blob) => {
           const url = URL.createObjectURL(blob);
           previewUrls.push(url);
-          prev.innerHTML = `<iframe class="detail-iframe" src="${url}#view=FitH" title="PDF"></iframe>`;
+          prev.innerHTML = `<div class="detail-preview-frame"><iframe class="detail-iframe" src="${url}#view=Fit&toolbar=0" title="PDF"></iframe></div>`;
         })
         .catch(() => {});
     }
@@ -1217,6 +1258,7 @@
     if (!wrap) return;
     const rows = [
       ["adminStatUsers", s.users_registered],
+      ["adminStatVisits", s.miniapp_opens],
       ["adminStatVaults", s.vaults_with_uploads],
       ["adminStatDocs", s.total_documents],
     ];
@@ -1228,9 +1270,15 @@
       .join("");
   }
 
-  function renderAdminClaims(d) {
+  function revokeAdminClaimUrls() {
+    (state.adminClaimUrls || []).forEach((u) => URL.revokeObjectURL(u));
+    state.adminClaimUrls = [];
+  }
+
+  async function renderAdminClaims(d) {
     const wrap = $("#admin-claims-body");
     if (!wrap) return;
+    revokeAdminClaimUrls();
     const items = d.items || [];
     if (!items.length) {
       wrap.innerHTML = `<p class="admin-claims-empty">${escapeHtml(t("adminClaimsEmpty"))}</p>`;
@@ -1255,6 +1303,9 @@
           }),
         );
         const when = escapeHtml(formatDate(m.claimed_at));
+        const receiptSlot = m.has_receipt
+          ? `<div class="admin-claim-receipt-slot" data-claim-uid="${String(m.user_id ?? "")}"></div>`
+          : "";
         return `<article class="admin-claim-card" aria-label="${uid}">
           <div class="admin-claim-grid">
             <div><span class="admin-claim-k">${escapeHtml(t("adminClaimColId"))}</span><span class="admin-claim-v mono">${uid}</span></div>
@@ -1263,9 +1314,43 @@
             <div><span class="admin-claim-k">${escapeHtml(t("adminClaimColPlan"))}</span><span class="admin-claim-v">${tier}</span></div>
             <div><span class="admin-claim-k">${escapeHtml(t("adminClaimColTime"))}</span><span class="admin-claim-v">${when}</span></div>
           </div>
+          ${receiptSlot}
         </article>`;
       })
       .join("");
+    for (const m of items) {
+      if (!m.has_receipt) continue;
+      const uid = m.user_id;
+      const slot = wrap.querySelector(
+        `.admin-claim-receipt-slot[data-claim-uid="${CSS.escape(String(uid))}"]`,
+      );
+      if (!slot) continue;
+      try {
+        const r = await fetch(`/api/admin/claim-receipt/${uid}`, {
+          headers: headers(),
+        });
+        if (!r.ok) continue;
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        state.adminClaimUrls.push(url);
+        const mime = (m.receipt_mime || blob.type || "").toLowerCase();
+        if (mime.includes("pdf")) {
+          const frame = document.createElement("iframe");
+          frame.className = "admin-claim-receipt-img";
+          frame.title = "Receipt";
+          frame.src = url;
+          slot.replaceWith(frame);
+        } else {
+          const img = document.createElement("img");
+          img.src = url;
+          img.alt = "";
+          img.className = "admin-claim-receipt-img";
+          slot.replaceWith(img);
+        }
+      } catch (_) {
+        /* ignore */
+      }
+    }
   }
 
   async function openAdminModal() {
@@ -1285,7 +1370,7 @@
         apiAdminManualClaims(),
       ]);
       renderAdminStats(s);
-      renderAdminClaims(c);
+      await renderAdminClaims(c);
     } catch {
       if (wrap)
         wrap.innerHTML = `<p class="admin-error">${escapeHtml(t("adminStatsFail"))}</p>`;
@@ -1296,6 +1381,7 @@
   }
 
   function closeAdminModal() {
+    revokeAdminClaimUrls();
     $("#admin-modal")?.classList.add("hidden");
   }
 
@@ -1400,7 +1486,7 @@
         apiAdminManualClaims(),
       ]);
       renderAdminStats(s);
-      renderAdminClaims(c);
+      await renderAdminClaims(c);
     } catch (_) {}
   });
 
@@ -1514,15 +1600,30 @@
     showManualPickStep();
   });
 
+  $("#btn-billing-receipt-pick")?.addEventListener("click", () => {
+    $("#billing-receipt-input")?.click();
+  });
+  $("#billing-receipt-input")?.addEventListener("change", onBillingReceiptFileChange);
+
   $("#btn-billing-i-paid")?.addEventListener("click", async () => {
     const tier = state.manualSelectedTier;
     if (!tier || state.billingMode !== "manual") {
       showToast(t("billingWaitAdminConfirm"));
       return;
     }
-    const r = await postJson("/api/billing/manual-claim", {
-      price_uzs: tier.price_uzs,
-      slots: tier.slots,
+    const file = $("#billing-receipt-input")?.files?.[0];
+    if (!file) {
+      showToast(t("billingReceiptRequired"));
+      return;
+    }
+    const fd = new FormData();
+    fd.append("price_uzs", String(tier.price_uzs));
+    fd.append("slots", String(tier.slots));
+    fd.append("receipt", file);
+    const r = await fetch("/api/billing/manual-claim", {
+      method: "POST",
+      headers: headers(),
+      body: fd,
     });
     if (!r.ok) {
       let msg = t("toastConnection");
@@ -1530,11 +1631,14 @@
         const err = await r.json();
         const d = err.detail;
         if (d === "invalid_tier") msg = t("billingClaimInvalidTier");
+        else if (d === "invalid_receipt_type") msg = t("billingReceiptBadType");
+        else if (d === "receipt_too_large") msg = t("billingReceiptTooLarge");
       } catch (_) {}
       showToast(msg);
       return;
     }
     showToast(t("billingClaimRecorded"));
+    clearBillingReceipt();
   });
 
   boot();

@@ -52,7 +52,6 @@ from bot.config import (
     manual_billing_tiers,
     manual_tier_allowed_amounts,
 )
-from bot.payment_qr import build_payment_qr_png
 from bot.keyboards import CATEGORY_EMOJI, CATEGORY_LABELS, CATEGORY_ORDER
 from bot.preview import build_preview_jpeg
 from bot.storage import (
@@ -78,6 +77,21 @@ from bot.paytech_integration import (
 )
 
 log = logging.getLogger(__name__)
+
+_MAX_RECEIPT_BYTES = 10 * 1024 * 1024
+_ALLOWED_RECEIPT_TYPES = frozenset(
+    {
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/gif",
+        "application/pdf",
+    }
+)
+
+
+def _admin_web_token_ok(token: str) -> bool:
+    return bool(ADMIN_WEB_TOKEN) and token == ADMIN_WEB_TOKEN
 
 
 class DocPatch(BaseModel):
@@ -106,11 +120,6 @@ class InviteAcceptBody(BaseModel):
 
 class AdminGrantBody(BaseModel):
     target_user_id: int = Field(..., ge=1)
-    slots: int = Field(..., ge=1, le=10_000)
-
-
-class ManualClaimBody(BaseModel):
-    price_uzs: int = Field(..., ge=1)
     slots: int = Field(..., ge=1, le=10_000)
 
 
@@ -272,20 +281,6 @@ def create_webapp_app() -> FastAPI:
 
     Init = Depends(init_context_dep)
 
-    async def init_context_flexible(
-        tgWebAppData: str | None = Query(None),
-        x_telegram_init_data: str | None = Header(None, alias="X-Telegram-Init-Data"),
-    ) -> InitContext:
-        raw = (x_telegram_init_data or "").strip() or (tgWebAppData or "").strip()
-        if not raw:
-            raise HTTPException(
-                status_code=401,
-                detail="Missing Telegram auth (header or tgWebAppData)",
-            )
-        return await _init_context_from_raw(raw)
-
-    InitFlex = Depends(init_context_flexible)
-
     async def _remove_doc_blobs(vault_id: int, meta: dict) -> None:
         await remove_stored_file(vault_id, meta["stored_filename"])
         prev = (meta.get("preview_stored_filename") or "").strip()
@@ -303,6 +298,7 @@ def create_webapp_app() -> FastAPI:
 
     @app.get("/api/bootstrap")
     async def api_bootstrap(ctx: InitContext = Init) -> dict:
+        await db.increment_bootstrap_count()
         counts = await db.count_by_category(ctx.vault_id)
         cats = [
             {
@@ -385,6 +381,8 @@ def create_webapp_app() -> FastAPI:
             ln = (r.get("last_name") or "").strip()
             parts = [p for p in (fn, ln) if p]
             display_name = " ".join(parts) if parts else ""
+            has_receipt = bool((r.get("receipt_stored_filename") or "").strip())
+            rmt = (r.get("receipt_mime") or "").strip()
             items.append(
                 {
                     "user_id": r["user_id"],
@@ -395,6 +393,8 @@ def create_webapp_app() -> FastAPI:
                     "price_uzs": r["price_uzs"],
                     "slots_requested": r["slots_requested"],
                     "claimed_at": r["claimed_at"],
+                    "has_receipt": has_receipt,
+                    "receipt_mime": rmt,
                 }
             )
         return {"items": items}
@@ -738,49 +738,147 @@ def create_webapp_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=reason)
         return {"ok": True, "reason": reason}
 
-    @app.get("/api/billing/payment-qr")
-    async def api_payment_qr(
-        amount_uzs: int = Query(..., ge=1, le=50_000_000),
-        ctx: InitContext = InitFlex,
-    ):
-        if BILLING_MODE != "manual":
-            raise HTTPException(status_code=400, detail="not_manual_billing")
-        if not TRANSFER_CARD_DISPLAY.strip():
-            raise HTTPException(status_code=503, detail="card_not_configured")
-        allowed = manual_tier_allowed_amounts()
-        if amount_uzs not in allowed:
-            raise HTTPException(status_code=400, detail="invalid_amount")
-        comment = f"FAMDOC-{ctx.user_id}"
-        png = build_payment_qr_png(
-            card=TRANSFER_CARD_DISPLAY,
-            amount_uzs=amount_uzs,
-            comment=comment,
-        )
-        return Response(content=png, media_type="image/png")
-
     @app.post("/api/billing/manual-claim")
-    async def api_manual_claim(body: ManualClaimBody, ctx: InitContext = Init):
+    async def api_manual_claim(
+        ctx: InitContext = Init,
+        price_uzs: int = Form(...),
+        slots: int = Form(...),
+        receipt: UploadFile = File(...),
+    ):
         if BILLING_MODE != "manual":
             raise HTTPException(status_code=400, detail="not_manual_billing")
         if FREE_DOCUMENT_LIMIT <= 0:
             raise HTTPException(status_code=400, detail="billing_disabled")
-        if not _manual_tier_valid(body.price_uzs, body.slots):
+        if not _manual_tier_valid(price_uzs, slots):
             raise HTTPException(status_code=400, detail="invalid_tier")
+        raw = await receipt.read()
+        if not raw or len(raw) > _MAX_RECEIPT_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="receipt_too_large",
+            )
+        mt = (receipt.content_type or "").split(";")[0].strip().lower()
+        if mt not in _ALLOWED_RECEIPT_TYPES:
+            raise HTTPException(status_code=400, detail="invalid_receipt_type")
+        old = await db.get_manual_payment_claim(ctx.user_id)
+        if old:
+            ov = int(old.get("vault_id") or 0)
+            ofn = (old.get("receipt_stored_filename") or "").strip()
+            if ov and ofn:
+                await remove_stored_file(ov, ofn)
+        orig = resolve_display_filename("", receipt.filename) or "receipt"
+        stored = await save_upload(ctx.vault_id, orig, raw)
         await db.upsert_manual_payment_claim(
             ctx.user_id,
             first_name=ctx.first_name,
             last_name=ctx.last_name,
             username=ctx.telegram_username,
-            price_uzs=body.price_uzs,
-            slots_requested=body.slots,
+            price_uzs=price_uzs,
+            slots_requested=slots,
+            vault_id=ctx.vault_id,
+            receipt_stored_filename=stored,
+            receipt_mime=mt,
         )
         return {"ok": True}
 
+    @app.get("/api/admin/claim-receipt/{user_id}")
+    async def api_admin_claim_receipt(user_id: int, ctx: InitContext = Init):
+        if not is_miniapp_admin(ctx.user_id, ctx.telegram_username):
+            raise HTTPException(status_code=403, detail="forbidden")
+        row = await db.get_manual_payment_claim(user_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="not_found")
+        fn = (row.get("receipt_stored_filename") or "").strip()
+        vid = int(row.get("vault_id") or 0)
+        if not fn or not vid:
+            raise HTTPException(status_code=404, detail="no_receipt")
+        data = await read_stored_file(vid, fn)
+        if not data:
+            raise HTTPException(status_code=404, detail="missing_file")
+        media = (row.get("receipt_mime") or "").strip() or "application/octet-stream"
+        return Response(content=data, media_type=media)
+
     @app.get("/admin/stats")
     async def admin_stats_http(token: str = Query("")):
-        if not ADMIN_WEB_TOKEN or token != ADMIN_WEB_TOKEN:
+        if not _admin_web_token_ok(token):
             raise HTTPException(status_code=401, detail="unauthorized")
         return await db.admin_statistics()
+
+    @app.get("/admin")
+    async def admin_dashboard():
+        admin_html = webapp_dir / "admin.html"
+        if not admin_html.is_file():
+            raise HTTPException(status_code=404, detail="admin_ui_missing")
+        return HTMLResponse(
+            content=admin_html.read_text(encoding="utf-8"),
+            media_type="text/html; charset=utf-8",
+        )
+
+    @app.get("/admin/api/data")
+    async def admin_data_api(token: str = Query("")):
+        if not _admin_web_token_ok(token):
+            raise HTTPException(status_code=401, detail="unauthorized")
+        stats = await db.admin_statistics()
+        rows = await db.list_manual_payment_claims()
+        claims: list[dict] = []
+        for r in rows:
+            fn = (r.get("first_name") or "").strip()
+            ln = (r.get("last_name") or "").strip()
+            parts = [p for p in (fn, ln) if p]
+            display_name = " ".join(parts) if parts else ""
+            rmt = (r.get("receipt_mime") or "").strip()
+            claims.append(
+                {
+                    "user_id": r["user_id"],
+                    "display_name": display_name,
+                    "username": r.get("username"),
+                    "price_uzs": r["price_uzs"],
+                    "slots_requested": r["slots_requested"],
+                    "claimed_at": r["claimed_at"],
+                    "has_receipt": bool(
+                        (r.get("receipt_stored_filename") or "").strip()
+                    ),
+                    "receipt_mime": rmt,
+                }
+            )
+        return {"stats": stats, "claims": claims}
+
+    @app.get("/admin/api/receipt/{user_id}")
+    async def admin_receipt_api(user_id: int, token: str = Query("")):
+        if not _admin_web_token_ok(token):
+            raise HTTPException(status_code=401, detail="unauthorized")
+        row = await db.get_manual_payment_claim(user_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="not_found")
+        fn = (row.get("receipt_stored_filename") or "").strip()
+        vid = int(row.get("vault_id") or 0)
+        if not fn or not vid:
+            raise HTTPException(status_code=404, detail="no_receipt")
+        data = await read_stored_file(vid, fn)
+        if not data:
+            raise HTTPException(status_code=404, detail="missing_file")
+        media = (row.get("receipt_mime") or "").strip() or "application/octet-stream"
+        return Response(content=data, media_type=media)
+
+    @app.post("/admin/api/grant")
+    async def admin_grant_web(body: AdminGrantBody, token: str = Query("")):
+        if not _admin_web_token_ok(token):
+            raise HTTPException(status_code=401, detail="unauthorized")
+        vault_id = await db.get_vault_for_user(body.target_user_id)
+        await db.add_extra_slots(vault_id, body.slots)
+        await db.delete_manual_payment_claim(body.target_user_id)
+        extra = await db.get_purchased_extra_slots(vault_id)
+        cap: int | None = None
+        if FREE_DOCUMENT_LIMIT > 0:
+            cap = FREE_DOCUMENT_LIMIT + extra
+        return {
+            "ok": True,
+            "vault_id": vault_id,
+            "target_user_id": body.target_user_id,
+            "slots_added": body.slots,
+            "purchased_extra_slots_total": extra,
+            "document_cap": cap,
+        }
 
     @app.post("/api/billing/invoice")
     async def api_billing_invoice(ctx: InitContext = Init):
