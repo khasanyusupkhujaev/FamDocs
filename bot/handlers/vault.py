@@ -364,6 +364,15 @@ async def save_upload_handler(message: Message, state: FSMContext, bot: Bot) -> 
             )
             return
 
+    if await db.vault_has_crypto_password(family):
+        await message.answer(
+            "This vault uses <b>end-to-end encryption</b>. "
+            "Upload files from the <b>FamDocs Mini App</b> so they are encrypted on your device.",
+            parse_mode="HTML",
+            reply_markup=main_reply_keyboard(),
+        )
+        return
+
     buf = await bot.download(file=file_obj)
     raw = buf.read()
     orig = _original_name_from_document(message)

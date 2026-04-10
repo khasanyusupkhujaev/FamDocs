@@ -361,7 +361,37 @@
       </div>
     </div>
 
+    <div class="modal-overlay hidden" id="vault-modal" role="dialog" aria-modal="true">
+      <div class="modal sheet vault-modal-card">
+        <h2 id="vault-modal-title" class="vault-modal-h2"></h2>
+        <p id="vault-modal-lead" class="field-hint"></p>
+        <label class="field-label" for="vault-pass-1" data-i18n="vaultPassLabel"></label>
+        <input
+          type="password"
+          id="vault-pass-1"
+          class="field-input"
+          autocomplete="new-password"
+        />
+        <label
+          class="field-label hidden"
+          id="vault-pass-2-label"
+          for="vault-pass-2"
+          data-i18n="vaultPassRepeatLabel"
+        ></label>
+        <input
+          type="password"
+          id="vault-pass-2"
+          class="field-input hidden"
+          autocomplete="new-password"
+        />
+        <p id="vault-modal-err" class="field-hint vault-modal-err" hidden></p>
+        <button type="button" class="btn-primary wide" id="vault-modal-submit"></button>
+      </div>
+    </div>
+
     <div id="toast" class="toast hidden" role="status"></div>
+    <script src="/static/i18n.js"></script>
+    <script src="/static/vault-crypto.js"></script>
     <script src="/static/app.js"></script>
   </body>
 </html>

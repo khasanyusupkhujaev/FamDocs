@@ -7,6 +7,22 @@ window.FamDocI18n = {
     brandTitle: "FamDocs",
     headerTitle: "Your family documents",
     securePill: "Secured via Telegram",
+    vaultCreateTitle: "Create vault password",
+    vaultCreateLead:
+      "Choose a strong password (10+ characters). Your files are encrypted on this device before upload; the server only stores a hash of this password, not the password itself.",
+    vaultCreateSubmit: "Create password & continue",
+    vaultUnlockTitle: "Unlock vault",
+    vaultUnlockLead:
+      "Enter your vault password each time you open the app. It is sent over HTTPS only for verification, then kept in memory on this device to encrypt and decrypt files (never stored in the browser).",
+    vaultUnlockSubmit: "Unlock",
+    vaultPassLabel: "Password",
+    vaultPassRepeatLabel: "Repeat password",
+    vaultPassTooShort: "Use at least 10 characters.",
+    vaultPassMismatch: "Passwords do not match.",
+    vaultSetupFail: "Could not save password. Try again.",
+    vaultUnlockFail: "Wrong password.",
+    vaultRateLimited: "Too many attempts. Wait a few minutes.",
+    vaultCryptoFail: "Encryption failed. Reload and try again.",
     cloudBtn: "Link Google Drive / Dropbox",
     cloudHint: "Cloud sync will be available in a future update.",
     noTgBanner:
@@ -160,6 +176,12 @@ window.FamDocI18n = {
     adminClaimColPlan: "Plan",
     adminClaimColTime: "Claimed",
     adminClaimTierLine: "{price} · +{slots} documents / month",
+    adminClaimDeny: "Deny",
+    adminClaimDenyConfirm:
+      "Remove this payment claim without granting slots? The uploaded receipt will be deleted.",
+    adminClaimDenied: "Claim removed.",
+    adminClaimDenyFail: "Could not remove the claim.",
+    adminClaimDenyGone: "That claim is no longer pending.",
     adminNoDisplayName: "(no name)",
     adminNoUsername: "(no username)",
     billingClaimRecorded:
@@ -209,6 +231,22 @@ window.FamDocI18n = {
     brandTitle: "FamDocs",
     headerTitle: "Oila hujjatlaringiz",
     securePill: "Telegram orqali himoyalangan",
+    vaultCreateTitle: "Vault parolini yarating",
+    vaultCreateLead:
+      "Kuchli parol tanlang (10+ belgi). Fayllar qurilmangizda shifrlanadi; serverda faqat parolning xeshi saqlanadi.",
+    vaultCreateSubmit: "Parol yaratish va davom etish",
+    vaultUnlockTitle: "Vaultni ochish",
+    vaultUnlockLead:
+      "Har safar ilovani ochganda vault parolini kiriting. U faqat HTTPS orqali tekshiriladi va shifrlash uchun faqat xotirada turadi (brauzerda saqlanmaydi).",
+    vaultUnlockSubmit: "Ochish",
+    vaultPassLabel: "Parol",
+    vaultPassRepeatLabel: "Parolni takrorlang",
+    vaultPassTooShort: "Kamida 10 belgi.",
+    vaultPassMismatch: "Parollar mos emas.",
+    vaultSetupFail: "Parol saqlanmadi. Qayta urinib ko‘ring.",
+    vaultUnlockFail: "Noto‘g‘ri parol.",
+    vaultRateLimited: "Juda ko‘p urinish. Biroz kuting.",
+    vaultCryptoFail: "Shifrlash xatosi. Sahifani yangilang.",
     cloudBtn: "Google Drive / Dropbox ulanish",
     cloudHint: "Bulut sinxronlash keyingi versiyada.",
     noTgBanner:
@@ -362,6 +400,12 @@ window.FamDocI18n = {
     adminClaimColPlan: "Tarif",
     adminClaimColTime: "Vaqt",
     adminClaimTierLine: "{price} · oyiga +{slots} ta hujjat",
+    adminClaimDeny: "Rad etish",
+    adminClaimDenyConfirm:
+      "Slot bermasdan bu to‘lov arizasini o‘chirasizmi? Yuklangan chek o‘chiriladi.",
+    adminClaimDenied: "Ariza olib tashlandi.",
+    adminClaimDenyFail: "Arizani olib bo‘lmadi.",
+    adminClaimDenyGone: "Bu ariza endi navbatda emas.",
     adminNoDisplayName: "(ism yo‘q)",
     adminNoUsername: "(username yo‘q)",
     billingClaimRecorded:
@@ -411,6 +455,22 @@ window.FamDocI18n = {
     brandTitle: "FamDocs",
     headerTitle: "Ваши семейные документы",
     securePill: "Защита через Telegram",
+    vaultCreateTitle: "Создайте пароль хранилища",
+    vaultCreateLead:
+      "Придумайте надёжный пароль (от 10 символов). Файлы шифруются на устройстве до отправки; на сервере хранится только хеш пароля.",
+    vaultCreateSubmit: "Создать пароль и продолжить",
+    vaultUnlockTitle: "Разблокировать хранилище",
+    vaultUnlockLead:
+      "Введите пароль хранилища при каждом открытии приложения. Он передаётся по HTTPS только для проверки, затем держится в памяти для шифрования (не сохраняется в браузере).",
+    vaultUnlockSubmit: "Войти",
+    vaultPassLabel: "Пароль",
+    vaultPassRepeatLabel: "Повторите пароль",
+    vaultPassTooShort: "Минимум 10 символов.",
+    vaultPassMismatch: "Пароли не совпадают.",
+    vaultSetupFail: "Не удалось сохранить пароль. Попробуйте снова.",
+    vaultUnlockFail: "Неверный пароль.",
+    vaultRateLimited: "Слишком много попыток. Подождите.",
+    vaultCryptoFail: "Ошибка шифрования. Обновите страницу.",
     cloudBtn: "Google Drive / Dropbox",
     cloudHint: "Синхронизация с облаком — в будущем.",
     noTgBanner:
@@ -564,6 +624,12 @@ window.FamDocI18n = {
     adminClaimColPlan: "Тариф",
     adminClaimColTime: "Отметка",
     adminClaimTierLine: "{price} · +{slots} док. в месяц",
+    adminClaimDeny: "Отклонить",
+    adminClaimDenyConfirm:
+      "Удалить эту заявку без выдачи слотов? Загруженный чек будет удалён.",
+    adminClaimDenied: "Заявка удалена.",
+    adminClaimDenyFail: "Не удалось удалить заявку.",
+    adminClaimDenyGone: "Этой заявки уже нет в очереди.",
     adminNoDisplayName: "(без имени)",
     adminNoUsername: "(нет username)",
     billingClaimRecorded:

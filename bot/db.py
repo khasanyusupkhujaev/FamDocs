@@ -164,6 +164,49 @@ async def _migrate_schema(db: aiosqlite.Connection) -> None:
     await db.execute(
         "INSERT OR IGNORE INTO app_analytics (id, bootstrap_count) VALUES (1, 0)"
     )
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vault_crypto (
+            vault_id INTEGER PRIMARY KEY NOT NULL,
+            password_hash TEXT NOT NULL,
+            kdf_salt_b64 TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    cur_doc = await db.execute("PRAGMA table_info(documents)")
+    doc_cols = {r[1] for r in await cur_doc.fetchall()}
+    if doc_cols and "crypto_encrypted" not in doc_cols:
+        await db.execute(
+            "ALTER TABLE documents ADD COLUMN crypto_encrypted INTEGER NOT NULL DEFAULT 0"
+        )
+    if doc_cols and "crypto_iv" not in doc_cols:
+        await db.execute(
+            "ALTER TABLE documents ADD COLUMN crypto_iv TEXT NOT NULL DEFAULT ''"
+        )
+    if doc_cols and "crypto_tag" not in doc_cols:
+        await db.execute(
+            "ALTER TABLE documents ADD COLUMN crypto_tag TEXT NOT NULL DEFAULT ''"
+        )
+    if doc_cols and "preview_crypto_iv" not in doc_cols:
+        await db.execute(
+            "ALTER TABLE documents ADD COLUMN preview_crypto_iv TEXT NOT NULL DEFAULT ''"
+        )
+    if doc_cols and "preview_crypto_tag" not in doc_cols:
+        await db.execute(
+            "ALTER TABLE documents ADD COLUMN preview_crypto_tag TEXT NOT NULL DEFAULT ''"
+        )
+    if doc_cols and "encryption_state" not in doc_cols:
+        await db.execute(
+            """
+            ALTER TABLE documents ADD COLUMN encryption_state TEXT NOT NULL DEFAULT 'legacy_plaintext'
+            """
+        )
+        await db.execute(
+            """
+            UPDATE documents SET encryption_state = 'encrypted' WHERE crypto_encrypted != 0
+            """
+        )
 
 
 async def init_db() -> None:
@@ -198,15 +241,24 @@ async def add_document(
     tags: str = "",
     notes: str = "",
     preview_stored_filename: str = "",
+    crypto_encrypted: int = 0,
+    crypto_iv: str = "",
+    crypto_tag: str = "",
+    preview_crypto_iv: str = "",
+    preview_crypto_tag: str = "",
+    encryption_state: str = "legacy_plaintext",
 ) -> int:
     now = datetime.now(timezone.utc).isoformat()
+    es = encryption_state if encryption_state in ("encrypted", "legacy_plaintext") else "legacy_plaintext"
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             """
             INSERT INTO documents
             (family_chat_id, category, stored_filename, original_filename,
-             mime_type, file_size, uploaded_at, tags, notes, preview_stored_filename)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             mime_type, file_size, uploaded_at, tags, notes, preview_stored_filename,
+             crypto_encrypted, crypto_iv, crypto_tag, preview_crypto_iv, preview_crypto_tag,
+             encryption_state)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 family_chat_id,
@@ -219,6 +271,12 @@ async def add_document(
                 tags,
                 notes,
                 preview_stored_filename or "",
+                int(crypto_encrypted),
+                crypto_iv or "",
+                crypto_tag or "",
+                preview_crypto_iv or "",
+                preview_crypto_tag or "",
+                es,
             ),
         )
         await db.commit()
@@ -230,7 +288,46 @@ def _row_to_dict(r: aiosqlite.Row) -> dict[str, Any]:
     d.setdefault("tags", "")
     d.setdefault("notes", "")
     d.setdefault("preview_stored_filename", "")
+    d.setdefault("crypto_encrypted", 0)
+    d.setdefault("crypto_iv", "")
+    d.setdefault("crypto_tag", "")
+    d.setdefault("preview_crypto_iv", "")
+    d.setdefault("preview_crypto_tag", "")
+    d.setdefault("encryption_state", "legacy_plaintext")
     return d
+
+
+async def get_vault_crypto(vault_id: int) -> dict[str, Any] | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """
+            SELECT vault_id, password_hash, kdf_salt_b64, created_at
+            FROM vault_crypto WHERE vault_id = ?
+            """,
+            (vault_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def create_vault_crypto(
+    vault_id: int, password_hash: str, kdf_salt_b64: str
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO vault_crypto (vault_id, password_hash, kdf_salt_b64, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (vault_id, password_hash, kdf_salt_b64, now),
+        )
+        await db.commit()
+
+
+async def vault_has_crypto_password(vault_id: int) -> bool:
+    return await get_vault_crypto(vault_id) is not None
 
 
 async def list_documents(
@@ -250,6 +347,12 @@ async def list_documents(
                     SELECT id, category, stored_filename, original_filename,
                            mime_type, file_size, uploaded_at, tags, notes,
                            IFNULL(preview_stored_filename,'') AS preview_stored_filename
+                           , IFNULL(crypto_encrypted, 0) AS crypto_encrypted
+                           , IFNULL(crypto_iv, '') AS crypto_iv
+                           , IFNULL(crypto_tag, '') AS crypto_tag
+                           , IFNULL(preview_crypto_iv, '') AS preview_crypto_iv
+                           , IFNULL(preview_crypto_tag, '') AS preview_crypto_tag
+                           , IFNULL(encryption_state, 'legacy_plaintext') AS encryption_state
                     FROM documents
                     WHERE family_chat_id = ? AND category = ?
                       AND (
@@ -267,6 +370,12 @@ async def list_documents(
                     SELECT id, category, stored_filename, original_filename,
                            mime_type, file_size, uploaded_at, tags, notes,
                            IFNULL(preview_stored_filename,'') AS preview_stored_filename
+                           , IFNULL(crypto_encrypted, 0) AS crypto_encrypted
+                           , IFNULL(crypto_iv, '') AS crypto_iv
+                           , IFNULL(crypto_tag, '') AS crypto_tag
+                           , IFNULL(preview_crypto_iv, '') AS preview_crypto_iv
+                           , IFNULL(preview_crypto_tag, '') AS preview_crypto_tag
+                           , IFNULL(encryption_state, 'legacy_plaintext') AS encryption_state
                     FROM documents
                     WHERE family_chat_id = ? AND category = ?
                     ORDER BY uploaded_at DESC
@@ -280,6 +389,12 @@ async def list_documents(
                     SELECT id, category, stored_filename, original_filename,
                            mime_type, file_size, uploaded_at, tags, notes,
                            IFNULL(preview_stored_filename,'') AS preview_stored_filename
+                           , IFNULL(crypto_encrypted, 0) AS crypto_encrypted
+                           , IFNULL(crypto_iv, '') AS crypto_iv
+                           , IFNULL(crypto_tag, '') AS crypto_tag
+                           , IFNULL(preview_crypto_iv, '') AS preview_crypto_iv
+                           , IFNULL(preview_crypto_tag, '') AS preview_crypto_tag
+                           , IFNULL(encryption_state, 'legacy_plaintext') AS encryption_state
                     FROM documents
                     WHERE family_chat_id = ?
                       AND (
@@ -297,6 +412,12 @@ async def list_documents(
                     SELECT id, category, stored_filename, original_filename,
                            mime_type, file_size, uploaded_at, tags, notes,
                            IFNULL(preview_stored_filename,'') AS preview_stored_filename
+                           , IFNULL(crypto_encrypted, 0) AS crypto_encrypted
+                           , IFNULL(crypto_iv, '') AS crypto_iv
+                           , IFNULL(crypto_tag, '') AS crypto_tag
+                           , IFNULL(preview_crypto_iv, '') AS preview_crypto_iv
+                           , IFNULL(preview_crypto_tag, '') AS preview_crypto_tag
+                           , IFNULL(encryption_state, 'legacy_plaintext') AS encryption_state
                     FROM documents
                     WHERE family_chat_id = ?
                     ORDER BY uploaded_at DESC
@@ -317,6 +438,12 @@ async def get_document(
             SELECT id, category, stored_filename, original_filename,
                    mime_type, file_size, uploaded_at, tags, notes,
                    IFNULL(preview_stored_filename,'') AS preview_stored_filename
+                   , IFNULL(crypto_encrypted, 0) AS crypto_encrypted
+                   , IFNULL(crypto_iv, '') AS crypto_iv
+                   , IFNULL(crypto_tag, '') AS crypto_tag
+                   , IFNULL(preview_crypto_iv, '') AS preview_crypto_iv
+                   , IFNULL(preview_crypto_tag, '') AS preview_crypto_tag
+                   , IFNULL(encryption_state, 'legacy_plaintext') AS encryption_state
             FROM documents
             WHERE family_chat_id = ? AND id = ?
             """,
@@ -552,6 +679,48 @@ async def admin_statistics() -> dict[str, int]:
     }
 
 
+async def apply_document_crypto_migration(
+    family_chat_id: int,
+    doc_id: int,
+    *,
+    stored_filename: str,
+    file_size: int,
+    crypto_iv: str,
+    crypto_tag: str,
+    preview_stored_filename: str = "",
+    preview_crypto_iv: str = "",
+    preview_crypto_tag: str = "",
+) -> bool:
+    """Replace blobs with client-encrypted ciphertext; only from legacy_plaintext."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """
+            UPDATE documents SET
+                stored_filename = ?, file_size = ?,
+                crypto_encrypted = 1,
+                encryption_state = 'encrypted',
+                crypto_iv = ?, crypto_tag = ?,
+                preview_stored_filename = ?,
+                preview_crypto_iv = ?, preview_crypto_tag = ?
+            WHERE family_chat_id = ? AND id = ?
+              AND encryption_state = 'legacy_plaintext'
+            """,
+            (
+                stored_filename,
+                file_size,
+                crypto_iv,
+                crypto_tag,
+                preview_stored_filename or "",
+                preview_crypto_iv or "",
+                preview_crypto_tag or "",
+                family_chat_id,
+                doc_id,
+            ),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
 async def update_document(
     family_chat_id: int,
     doc_id: int,
@@ -619,6 +788,12 @@ async def get_documents_meta(
             SELECT id, category, stored_filename, original_filename,
                    mime_type, file_size, uploaded_at, tags, notes,
                    IFNULL(preview_stored_filename,'') AS preview_stored_filename
+                   , IFNULL(crypto_encrypted, 0) AS crypto_encrypted
+                   , IFNULL(crypto_iv, '') AS crypto_iv
+                   , IFNULL(crypto_tag, '') AS crypto_tag
+                   , IFNULL(preview_crypto_iv, '') AS preview_crypto_iv
+                   , IFNULL(preview_crypto_tag, '') AS preview_crypto_tag
+                   , IFNULL(encryption_state, 'legacy_plaintext') AS encryption_state
             FROM documents
             WHERE family_chat_id = ? AND id IN ({placeholders})
             """,

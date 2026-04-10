@@ -12,7 +12,6 @@ import zipfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-import re
 import html as html_lib
 from urllib.parse import quote, urlencode
 
@@ -54,12 +53,25 @@ from bot.config import (
     LOGO_TRANSPARENT_PATH,
     PAYME_MERCHANT_ID,
     PAYME_MERCHANT_KEY,
+    SECURE_COOKIES,
     TRANSFER_CARD_DISPLAY,
     TRANSFER_INSTRUCTIONS,
     WEBAPP_PUBLIC_URL,
     is_miniapp_admin,
     manual_billing_tiers,
     manual_tier_allowed_amounts,
+)
+from bot.vault_auth import (
+    SESSION_TTL_SECONDS,
+    VAULT_SESSION_COOKIE,
+    generate_kdf_salt_b64,
+    hash_vault_password,
+    sign_vault_session,
+    verify_vault_password,
+    verify_vault_session_cookie,
+    vault_rate_limit_check,
+    vault_rate_limit_fail,
+    vault_rate_limit_reset,
 )
 from bot.keyboards import CATEGORY_EMOJI, CATEGORY_LABELS, CATEGORY_ORDER
 from bot.preview import build_preview_jpeg
@@ -171,10 +183,20 @@ class AdminGrantBody(BaseModel):
     slots: int = Field(..., ge=1, le=10_000)
 
 
+class AdminDenyClaimBody(BaseModel):
+    target_user_id: int = Field(..., ge=1)
+
+
 class AdminPasswordLoginBody(BaseModel):
     telegram_user_id: int = Field(..., ge=1)
     secret: str = Field(..., min_length=1, max_length=500)
     telegram_username: str = Field("", max_length=64)
+
+
+class VaultPasswordBody(BaseModel):
+    """Plain password sent once over HTTPS for Argon2 verification only (never stored)."""
+
+    password: str = Field(..., min_length=10, max_length=256)
 
 
 @dataclass
@@ -187,18 +209,73 @@ class InitContext:
     last_name: str = ""
 
 
-def _download_file_response(data: bytes, media: str, fname: str) -> Response:
+def _document_is_encrypted(meta: dict) -> bool:
+    if (meta.get("encryption_state") or "").strip() == "encrypted":
+        return True
+    return int(meta.get("crypto_encrypted") or 0) != 0
+
+
+def _famdoc_crypto_headers(meta: dict) -> dict[str, str]:
+    """Expose IV/tag for client decryption (salt comes from bootstrap vault_crypto)."""
+    if not _document_is_encrypted(meta):
+        return {}
+    iv = (meta.get("crypto_iv") or "").strip()
+    tag = (meta.get("crypto_tag") or "").strip()
+    h = {
+        "X-FamDoc-Encrypted": "1",
+        "Access-Control-Expose-Headers": (
+            "Content-Disposition, X-FamDoc-Encrypted, X-FamDoc-Crypto-IV, "
+            "X-FamDoc-Crypto-Tag, X-FamDoc-Preview-Encrypted"
+        ),
+    }
+    if iv:
+        h["X-FamDoc-Crypto-IV"] = iv
+    if tag:
+        h["X-FamDoc-Crypto-Tag"] = tag
+    return h
+
+
+def _preview_crypto_headers(meta: dict) -> dict[str, str]:
+    if not _document_is_encrypted(meta):
+        return {}
+    piv = (meta.get("preview_crypto_iv") or "").strip()
+    ptag = (meta.get("preview_crypto_tag") or "").strip()
+    if not piv or not ptag:
+        return {}
+    return {
+        "X-FamDoc-Preview-Encrypted": "1",
+        "X-FamDoc-Crypto-IV": piv,
+        "X-FamDoc-Crypto-Tag": ptag,
+        "Access-Control-Expose-Headers": (
+            "Content-Disposition, X-FamDoc-Encrypted, X-FamDoc-Crypto-IV, "
+            "X-FamDoc-Crypto-Tag, X-FamDoc-Preview-Encrypted"
+        ),
+    }
+
+
+def _download_file_response(
+    data: bytes,
+    media: str,
+    fname: str,
+    *,
+    extra_headers: dict[str, str] | None = None,
+) -> Response:
     """Attachment + CORS for Telegram WebApp downloadFile (Bot API 8.0+)."""
     cd = "attachment; filename*=UTF-8''" + quote(fname, safe="")
-    return Response(
-        content=data,
-        media_type=media,
-        headers={
-            "Content-Disposition": cd,
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Expose-Headers": "Content-Disposition",
-        },
-    )
+    base: dict[str, str] = {
+        "Content-Disposition": cd,
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "Content-Disposition",
+    }
+    if extra_headers:
+        ex = extra_headers.get("Access-Control-Expose-Headers")
+        if ex:
+            base["Access-Control-Expose-Headers"] = ex
+        for k, v in extra_headers.items():
+            if k == "Access-Control-Expose-Headers":
+                continue
+            base[k] = v
+    return Response(content=data, media_type=media, headers=base)
 
 
 async def _init_context_from_raw(init_data: str) -> InitContext:
@@ -234,51 +311,10 @@ def _manual_tier_valid(price_uzs: int, slots: int) -> bool:
 
 def build_spa_html(webapp_dir: Path) -> str:
     """
-    Inline CSS/JS (and logos) into index.html.
-
-    Telegram WebViews + ngrok often fail to load separate /static/* assets
-    (interstitials / extra hops), which yields unstyled HTML and no JS — so
-    categories never appear. One HTML response fixes that.
-
-    The Telegram Web App bridge script is inlined too: if /static/telegram-web-app.js
-    never loads, window.Telegram.WebApp has no initData and the app shows "Open from Telegram…".
+    Serve index.html with external /static/* scripts and styles only (CSP: no inline JS/CSS).
+    Logo <img> src may be replaced with data URIs below.
     """
     html = (webapp_dir / "index.html").read_text(encoding="utf-8")
-    twa_path = webapp_dir / "telegram-web-app.js"
-    if twa_path.is_file():
-        twa = twa_path.read_text(encoding="utf-8")
-
-        def _inline_twa(_m: re.Match[str]) -> str:
-            return "<script>\n" + twa + "\n</script>"
-
-        html2 = re.sub(
-            r'<script\s+src="/static/telegram-web-app\.js"\s*>\s*</script>',
-            _inline_twa,
-            html,
-            count=1,
-        )
-        if html2 == html:
-            raise RuntimeError(
-                "index.html must include "
-                '<script src="/static/telegram-web-app.js"></script> for Mini App inlining'
-            )
-        html = html2
-    css = (webapp_dir / "styles.css").read_text(encoding="utf-8")
-    i18n_path = webapp_dir / "i18n.js"
-    i18n_block = (
-        i18n_path.read_text(encoding="utf-8") + "\n"
-        if i18n_path.is_file()
-        else ""
-    )
-    js = (webapp_dir / "app.js").read_text(encoding="utf-8")
-    html = html.replace(
-        '<link rel="stylesheet" href="/static/styles.css" />',
-        f"<style>\n{css}\n</style>",
-    )
-    html = html.replace(
-        '<script src="/static/app.js"></script>',
-        f"<script>\n{i18n_block}{js}\n</script>",
-    )
     transparent = (
         branding.spa_data_uri_transparent()
         or branding.png_data_uri_from_path(LOGO_TRANSPARENT_PATH)
@@ -312,6 +348,27 @@ def create_webapp_app() -> FastAPI:
         lifespan=_lifespan,
     )
 
+    _CSP_MINIAPP = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self'; "
+        "img-src 'self' blob: data:; "
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "frame-src 'self' blob:; "
+        # Telegram Mini App opens in web.telegram.org / telegram.org frames (not 'none').
+        "frame-ancestors https://web.telegram.org https://telegram.org;"
+    )
+
+    @app.middleware("http")
+    async def _security_headers_middleware(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        if request.url.path == "/":
+            response.headers["Content-Security-Policy"] = _CSP_MINIAPP
+        return response
+
     @app.exception_handler(StorageAccessDeniedError)
     async def _storage_access_denied(
         _request: Request, exc: StorageAccessDeniedError
@@ -335,6 +392,35 @@ def create_webapp_app() -> FastAPI:
 
     Init = Depends(init_context_dep)
 
+    async def _ensure_vault_unlocked(request: Request, ctx: InitContext) -> None:
+        row = await db.get_vault_crypto(ctx.vault_id)
+        if row is None:
+            return
+        raw_ck = request.cookies.get(VAULT_SESSION_COOKIE)
+        tok = verify_vault_session_cookie(BOT_TOKEN, raw_ck)
+        if tok is None or tok[0] != ctx.vault_id or tok[1] != ctx.user_id:
+            raise HTTPException(status_code=401, detail="vault_unlock_required")
+
+    async def require_vault_unlocked(
+        request: Request,
+        ctx: InitContext = Init,
+    ) -> InitContext:
+        await _ensure_vault_unlocked(request, ctx)
+        return ctx
+
+    VaultOK = Depends(require_vault_unlocked)
+
+    def _set_vault_session_cookie(response: Response, token: str) -> None:
+        response.set_cookie(
+            key=VAULT_SESSION_COOKIE,
+            value=token,
+            max_age=SESSION_TTL_SECONDS,
+            httponly=True,
+            samesite="lax",
+            secure=SECURE_COOKIES,
+            path="/",
+        )
+
     async def _remove_doc_blobs(vault_id: int, meta: dict) -> None:
         await remove_stored_file(vault_id, meta["stored_filename"])
         prev = (meta.get("preview_stored_filename") or "").strip()
@@ -350,23 +436,65 @@ def create_webapp_app() -> FastAPI:
             ]
         }
 
-    @app.get("/api/bootstrap")
-    async def api_bootstrap(ctx: InitContext = Init) -> dict:
-        await db.increment_bootstrap_count()
-        counts = await db.count_by_category(ctx.vault_id)
-        cats = [
+    @app.post("/api/vault/password")
+    async def vault_create_password(
+        body: VaultPasswordBody,
+        ctx: InitContext = Init,
+    ):
+        """First-time: store Argon2 hash + public KDF salt; set HttpOnly session cookie."""
+        if await db.get_vault_crypto(ctx.vault_id):
+            raise HTTPException(status_code=400, detail="vault_password_already_set")
+        salt = generate_kdf_salt_b64()
+        pw_hash = hash_vault_password(body.password)
+        await db.create_vault_crypto(ctx.vault_id, pw_hash, salt)
+        token = sign_vault_session(BOT_TOKEN, ctx.vault_id, ctx.user_id)
+        resp = JSONResponse(
+            {"ok": True, "vault_crypto": {"state": "unlocked", "kdf_salt_b64": salt}}
+        )
+        _set_vault_session_cookie(resp, token)
+        return resp
+
+    @app.post("/api/vault/unlock")
+    async def vault_unlock_post(
+        body: VaultPasswordBody,
+        ctx: InitContext = Init,
+    ):
+        """Verify password (Argon2); rate-limited; refresh session cookie."""
+        await vault_rate_limit_check(ctx.vault_id, ctx.user_id)
+        row = await db.get_vault_crypto(ctx.vault_id)
+        if not row:
+            raise HTTPException(status_code=400, detail="vault_no_password")
+        if not verify_vault_password(row["password_hash"], body.password):
+            await vault_rate_limit_fail(ctx.vault_id, ctx.user_id)
+            raise HTTPException(status_code=401, detail="vault_password_invalid")
+        await vault_rate_limit_reset(ctx.vault_id, ctx.user_id)
+        token = sign_vault_session(BOT_TOKEN, ctx.vault_id, ctx.user_id)
+        resp = JSONResponse(
             {
-                "id": k,
-                "label": CATEGORY_LABELS[k],
-                "emoji": CATEGORY_EMOJI[k],
-                "count": counts.get(k, 0),
+                "ok": True,
+                "vault_crypto": {
+                    "state": "unlocked",
+                    "kdf_salt_b64": row["kdf_salt_b64"],
+                },
             }
-            for k in CATEGORY_ORDER
-        ]
-        total = sum(counts.values())
-        extra = await db.get_purchased_extra_slots(ctx.vault_id)
-        cap = await effective_document_cap(ctx.vault_id)
-        doc_limit = cap if cap is not None else 0
+        )
+        _set_vault_session_cookie(resp, token)
+        return resp
+
+    @app.post("/api/vault/logout")
+    async def vault_logout_post() -> Response:
+        resp = JSONResponse({"ok": True})
+        resp.delete_cookie(
+            VAULT_SESSION_COOKIE,
+            path="/",
+            samesite="lax",
+            secure=SECURE_COOKIES,
+        )
+        return resp
+
+    @app.get("/api/bootstrap")
+    async def api_bootstrap(request: Request, ctx: InitContext = Init) -> dict:
+        await db.increment_bootstrap_count()
         paytech_ok = paytech_configured()
         if BILLING_MODE == "manual":
             manual_ok = bool(TRANSFER_CARD_DISPLAY.strip())
@@ -405,7 +533,71 @@ def create_webapp_app() -> FastAPI:
                 "mode": BILLING_MODE,
                 "paytech_ready": paytech_ok,
             }
+
+        vrow = await db.get_vault_crypto(ctx.vault_id)
+        cookie_v = verify_vault_session_cookie(
+            BOT_TOKEN, request.cookies.get(VAULT_SESSION_COOKIE)
+        )
+        vault_unlocked = bool(
+            vrow
+            and cookie_v
+            and cookie_v[0] == ctx.vault_id
+            and cookie_v[1] == ctx.user_id
+        )
+        if vrow is None:
+            vc_state = "none"
+        elif vault_unlocked:
+            vc_state = "unlocked"
+        else:
+            vc_state = "locked"
+
+        if vrow and not vault_unlocked:
+            return {
+                "vault_locked": True,
+                "vault_crypto": {
+                    "state": vc_state,
+                    "kdf_salt_b64": vrow["kdf_salt_b64"],
+                },
+                "categories": [
+                    {
+                        "id": k,
+                        "label": CATEGORY_LABELS[k],
+                        "emoji": CATEGORY_EMOJI[k],
+                        "count": 0,
+                    }
+                    for k in CATEGORY_ORDER
+                ],
+                "total": 0,
+                "context_mode": ctx.mode,
+                "document_limit": 0,
+                "free_document_limit": FREE_DOCUMENT_LIMIT,
+                "purchased_extra_slots": 0,
+                "telegram_user_id": ctx.user_id,
+                "telegram_username": ctx.telegram_username,
+                "is_admin": is_miniapp_admin(ctx.user_id, ctx.telegram_username),
+                "billing": billing_out,
+            }
+
+        counts = await db.count_by_category(ctx.vault_id)
+        cats = [
+            {
+                "id": k,
+                "label": CATEGORY_LABELS[k],
+                "emoji": CATEGORY_EMOJI[k],
+                "count": counts.get(k, 0),
+            }
+            for k in CATEGORY_ORDER
+        ]
+        total = sum(counts.values())
+        extra = await db.get_purchased_extra_slots(ctx.vault_id)
+        cap = await effective_document_cap(ctx.vault_id)
+        doc_limit = cap if cap is not None else 0
         return {
+            "vault_locked": False,
+            "vault_crypto": {
+                "state": vc_state,
+                "kdf_salt_b64": (vrow["kdf_salt_b64"] if vrow else ""),
+            },
             "categories": cats,
             "total": total,
             "context_mode": ctx.mode,
@@ -476,11 +668,24 @@ def create_webapp_app() -> FastAPI:
             "document_cap": cap,
         }
 
+    @app.post("/api/admin/deny-claim")
+    async def api_admin_deny_claim(
+        body: AdminDenyClaimBody,
+        ctx: InitContext = Init,
+    ):
+        if not is_miniapp_admin(ctx.user_id, ctx.telegram_username):
+            raise HTTPException(status_code=403, detail="forbidden")
+        row = await db.get_manual_payment_claim(body.target_user_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="no_such_claim")
+        await db.delete_manual_payment_claim(body.target_user_id)
+        return {"ok": True, "target_user_id": body.target_user_id}
+
     @app.get("/api/documents")
     async def api_list_documents(
         category: str | None = None,
         q: str | None = None,
-        ctx: InitContext = Init,
+        ctx: InitContext = VaultOK,
     ):
         if category in (None, "", "all"):
             cat = None
@@ -505,16 +710,80 @@ def create_webapp_app() -> FastAPI:
                     "tags": r.get("tags") or "",
                     "notes": r.get("notes") or "",
                     "has_preview": bool((r.get("preview_stored_filename") or "").strip()),
+                    "crypto_encrypted": bool(int(r.get("crypto_encrypted") or 0)),
+                    "encryption_state": (r.get("encryption_state") or "legacy_plaintext"),
                 }
                 for r in rows
             ]
         }
 
+    @app.post("/api/documents/{doc_id}/migrate-crypto")
+    async def api_migrate_document_crypto(
+        doc_id: int,
+        ctx: InitContext = VaultOK,
+        crypto_iv: str = Form(...),
+        crypto_tag: str = Form(...),
+        file: UploadFile = File(...),
+        preview_crypto_iv: str = Form(""),
+        preview_crypto_tag: str = Form(""),
+        preview_file: UploadFile | None = File(None),
+    ):
+        """Replace legacy_plaintext blob with client-encrypted ciphertext (same vault password)."""
+        if not await db.get_vault_crypto(ctx.vault_id):
+            raise HTTPException(status_code=400, detail="vault_no_password")
+        meta = await db.get_document(ctx.vault_id, doc_id)
+        if not meta:
+            raise HTTPException(status_code=404, detail="Not found")
+        if (meta.get("encryption_state") or "") != "legacy_plaintext":
+            raise HTTPException(status_code=409, detail="already_encrypted")
+        if not (crypto_iv or "").strip() or not (crypto_tag or "").strip():
+            raise HTTPException(status_code=400, detail="missing_crypto_metadata")
+        raw = await file.read()
+        if not raw:
+            raise HTTPException(status_code=400, detail="Empty file")
+        p_iv = (preview_crypto_iv or "").strip()
+        p_tag = (preview_crypto_tag or "").strip()
+        preview_raw: bytes | None = None
+        if preview_file is not None:
+            preview_raw = await preview_file.read()
+            if preview_raw and (not p_iv or not p_tag):
+                raise HTTPException(
+                    status_code=400, detail="missing_preview_crypto_metadata"
+                )
+
+        await remove_stored_file(ctx.vault_id, meta["stored_filename"])
+        prev_old = (meta.get("preview_stored_filename") or "").strip()
+        if prev_old:
+            await remove_stored_file(ctx.vault_id, prev_old)
+
+        orig_name = meta["original_filename"]
+        stored = await save_upload(ctx.vault_id, orig_name, raw)
+        preview_stored = ""
+        if preview_raw:
+            preview_stored = await save_upload(
+                ctx.vault_id, "preview.enc.jpg", preview_raw
+            )
+
+        ok = await db.apply_document_crypto_migration(
+            ctx.vault_id,
+            doc_id,
+            stored_filename=stored,
+            file_size=len(raw),
+            crypto_iv=crypto_iv.strip(),
+            crypto_tag=crypto_tag.strip(),
+            preview_stored_filename=preview_stored,
+            preview_crypto_iv=p_iv if preview_raw else "",
+            preview_crypto_tag=p_tag if preview_raw else "",
+        )
+        if not ok:
+            raise HTTPException(status_code=409, detail="migrate_race")
+        return {"ok": True, "id": doc_id}
+
     @app.patch("/api/documents/{doc_id}")
     async def api_patch_document(
         doc_id: int,
         body: DocPatch,
-        ctx: InitContext = Init,
+        ctx: InitContext = VaultOK,
     ):
         if body.category is not None and body.category not in CATEGORY_LABELS:
             raise HTTPException(status_code=400, detail="Unknown category")
@@ -532,7 +801,7 @@ def create_webapp_app() -> FastAPI:
         return {"ok": True, "document": meta}
 
     @app.delete("/api/documents/{doc_id}")
-    async def api_delete_document(doc_id: int, ctx: InitContext = Init):
+    async def api_delete_document(doc_id: int, ctx: InitContext = VaultOK):
         meta = await db.get_document(ctx.vault_id, doc_id)
         if not meta:
             raise HTTPException(status_code=404, detail="Not found")
@@ -541,7 +810,7 @@ def create_webapp_app() -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/documents/bulk-delete")
-    async def api_bulk_delete(payload: BulkIds, ctx: InitContext = Init):
+    async def api_bulk_delete(payload: BulkIds, ctx: InitContext = VaultOK):
         metas = await db.get_documents_meta(ctx.vault_id, payload.ids)
         found = {m["id"] for m in metas}
         if found != set(payload.ids):
@@ -552,7 +821,7 @@ def create_webapp_app() -> FastAPI:
         return {"ok": True, "deleted": len(payload.ids)}
 
     @app.post("/api/documents/bulk-move")
-    async def api_bulk_move(payload: BulkMove, ctx: InitContext = Init):
+    async def api_bulk_move(payload: BulkMove, ctx: InitContext = VaultOK):
         if payload.category not in CATEGORY_LABELS:
             raise HTTPException(status_code=400, detail="Unknown category")
         metas = await db.get_documents_meta(ctx.vault_id, payload.ids)
@@ -597,11 +866,12 @@ def create_webapp_app() -> FastAPI:
         )
 
     @app.post("/api/documents/bulk-zip")
-    async def api_bulk_zip(payload: BulkIds, ctx: InitContext = Init):
+    async def api_bulk_zip(payload: BulkIds, ctx: InitContext = VaultOK):
         return await _bulk_zip_response(ctx, payload.ids)
 
     @app.get("/api/documents/bulk-zip")
     async def api_bulk_zip_get(
+        request: Request,
         ids: str,
         tgWebAppData: str | None = Query(None),
         x_telegram_init_data: str | None = Header(None, alias="X-Telegram-Init-Data"),
@@ -613,6 +883,7 @@ def create_webapp_app() -> FastAPI:
                 detail="Missing Telegram auth (header or tgWebAppData query)",
             )
         ctx = await _init_context_from_raw(raw)
+        await _ensure_vault_unlocked(request, ctx)
         id_list: list[int] = []
         for part in ids.split(","):
             part = part.strip()
@@ -640,6 +911,7 @@ def create_webapp_app() -> FastAPI:
 
     @app.get("/api/documents/{doc_id}/file")
     async def api_download_file(
+        request: Request,
         doc_id: int,
         x_telegram_init_data: str | None = Header(None, alias="X-Telegram-Init-Data"),
         tgWebAppData: str | None = Query(None),
@@ -651,6 +923,7 @@ def create_webapp_app() -> FastAPI:
                 detail="Missing Telegram auth (header or tgWebAppData query)",
             )
         ctx = await _init_context_from_raw(raw)
+        await _ensure_vault_unlocked(request, ctx)
         meta = await db.get_document(ctx.vault_id, doc_id)
         if not meta:
             raise HTTPException(status_code=404, detail="Not found")
@@ -659,17 +932,31 @@ def create_webapp_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Missing file")
         media = meta.get("mime_type") or "application/octet-stream"
         fname = meta["original_filename"]
-        return _download_file_response(data, media, fname)
+        xh = _famdoc_crypto_headers(meta)
+        return _download_file_response(data, media, fname, extra_headers=xh or None)
 
     @app.get("/api/shared/documents/{doc_id}")
     async def api_shared_document(
+        request: Request,
         doc_id: int,
         vault_id: int,
         exp: int,
         sig: str,
+        tgWebAppData: str | None = Query(None),
+        x_telegram_init_data: str | None = Header(None, alias="X-Telegram-Init-Data"),
     ):
         if not verify_file_share(doc_id, vault_id, exp, sig):
             raise HTTPException(status_code=404, detail="Invalid or expired link")
+        raw = (x_telegram_init_data or "").strip() or (tgWebAppData or "").strip()
+        if not raw:
+            raise HTTPException(
+                status_code=401,
+                detail="telegram_auth_required",
+            )
+        ctx = await _init_context_from_raw(raw)
+        if int(vault_id) != int(ctx.vault_id):
+            raise HTTPException(status_code=403, detail="vault_mismatch")
+        await _ensure_vault_unlocked(request, ctx)
         meta = await db.get_document(vault_id, doc_id)
         if not meta:
             raise HTTPException(status_code=404, detail="Not found")
@@ -678,10 +965,11 @@ def create_webapp_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Missing file")
         media = meta.get("mime_type") or "application/octet-stream"
         fname = meta["original_filename"]
-        return _download_file_response(data, media, fname)
+        xh = _famdoc_crypto_headers(meta)
+        return _download_file_response(data, media, fname, extra_headers=xh or None)
 
     @app.get("/api/documents/{doc_id}/share-link")
-    async def api_document_share_link(doc_id: int, ctx: InitContext = Init):
+    async def api_document_share_link(doc_id: int, ctx: InitContext = VaultOK):
         if not WEBAPP_PUBLIC_URL:
             raise HTTPException(status_code=503, detail="share_requires_public_url")
         meta = await db.get_document(ctx.vault_id, doc_id)
@@ -704,15 +992,21 @@ def create_webapp_app() -> FastAPI:
         }
 
     @app.get("/api/documents/{doc_id}/preview")
-    async def api_doc_preview(doc_id: int, ctx: InitContext = Init):
+    async def api_doc_preview(doc_id: int, ctx: InitContext = VaultOK):
         meta = await db.get_document(ctx.vault_id, doc_id)
         if not meta:
             raise HTTPException(status_code=404, detail="Not found")
+        enc = _document_is_encrypted(meta)
         prev = (meta.get("preview_stored_filename") or "").strip()
         if prev:
             data = await read_stored_file(ctx.vault_id, prev)
             if data:
+                ph = _preview_crypto_headers(meta)
+                if ph:
+                    return Response(content=data, media_type="image/jpeg", headers=ph)
                 return Response(content=data, media_type="image/jpeg")
+        if enc:
+            raise HTTPException(status_code=404, detail="No preview")
         raw = await read_stored_file(ctx.vault_id, meta["stored_filename"])
         if not raw:
             raise HTTPException(status_code=404, detail="Missing file")
@@ -726,7 +1020,7 @@ def create_webapp_app() -> FastAPI:
         return Response(content=jpeg, media_type="image/jpeg")
 
     @app.get("/api/family")
-    async def api_family(ctx: InitContext = Init):
+    async def api_family(ctx: InitContext = VaultOK):
         if ctx.mode != "private":
             return {"mode": ctx.mode, "members": [], "family_features": False}
         members = await db.list_vault_members(ctx.vault_id)
@@ -755,7 +1049,7 @@ def create_webapp_app() -> FastAPI:
     @app.post("/api/family/invite")
     async def api_family_invite(
         body: FamilyInviteBody,
-        ctx: InitContext = Init,
+        ctx: InitContext = VaultOK,
     ):
         if ctx.mode != "private":
             raise HTTPException(status_code=400, detail="Invites only in private chat")
@@ -777,7 +1071,7 @@ def create_webapp_app() -> FastAPI:
         return {"token": token, "invite_url": invite_url}
 
     @app.post("/api/family/accept")
-    async def api_family_accept(body: InviteAcceptBody, ctx: InitContext = Init):
+    async def api_family_accept(body: InviteAcceptBody, ctx: InitContext = VaultOK):
         if ctx.mode != "private":
             raise HTTPException(
                 status_code=400, detail="family_accept_private_only"
@@ -794,7 +1088,7 @@ def create_webapp_app() -> FastAPI:
 
     @app.post("/api/billing/manual-claim")
     async def api_manual_claim(
-        ctx: InitContext = Init,
+        ctx: InitContext = VaultOK,
         price_uzs: int = Form(...),
         slots: int = Form(...),
         receipt: UploadFile = File(...),
@@ -1025,8 +1319,20 @@ def create_webapp_app() -> FastAPI:
             "document_cap": cap,
         }
 
+    @app.post("/admin/api/deny-claim")
+    async def admin_deny_claim_web(
+        body: AdminDenyClaimBody,
+        request: Request,
+    ):
+        _require_admin_web_user(request)
+        row = await db.get_manual_payment_claim(body.target_user_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="no_such_claim")
+        await db.delete_manual_payment_claim(body.target_user_id)
+        return {"ok": True, "target_user_id": body.target_user_id}
+
     @app.post("/api/billing/invoice")
-    async def api_billing_invoice(ctx: InitContext = Init):
+    async def api_billing_invoice(ctx: InitContext = VaultOK):
         if FREE_DOCUMENT_LIMIT <= 0:
             raise HTTPException(status_code=400, detail="billing_disabled")
         if BILLING_MODE == "manual":
@@ -1099,12 +1405,18 @@ def create_webapp_app() -> FastAPI:
 
     @app.post("/api/upload")
     async def api_upload(
-        ctx: InitContext = Init,
+        ctx: InitContext = VaultOK,
         category: str = Form(...),
         file: UploadFile = File(...),
         display_name: str = Form(""),
         tags: str = Form(""),
         notes: str = Form(""),
+        crypto_mode: str = Form("plaintext"),
+        crypto_iv: str = Form(""),
+        crypto_tag: str = Form(""),
+        preview_crypto_iv: str = Form(""),
+        preview_crypto_tag: str = Form(""),
+        preview_file: UploadFile | None = File(None),
     ):
         if category not in CATEGORY_LABELS:
             raise HTTPException(status_code=400, detail="Unknown category")
@@ -1119,9 +1431,42 @@ def create_webapp_app() -> FastAPI:
         raw = await file.read()
         if not raw:
             raise HTTPException(status_code=400, detail="Empty file")
+        vcrypto = await db.get_vault_crypto(ctx.vault_id)
+        vault_e2e = vcrypto is not None
+        is_e2e = (crypto_mode or "").strip().lower() == "e2e"
+        if vault_e2e and not is_e2e:
+            raise HTTPException(status_code=400, detail="vault_requires_client_encryption")
+        if is_e2e and not vault_e2e:
+            raise HTTPException(status_code=400, detail="e2e_not_enabled_for_vault")
+        if is_e2e:
+            if not (crypto_iv or "").strip() or not (crypto_tag or "").strip():
+                raise HTTPException(status_code=400, detail="missing_crypto_metadata")
+
         orig = resolve_display_filename(display_name, file.filename)
         stored = await save_upload(ctx.vault_id, orig, raw)
         suggested = suggest_category(orig, file.content_type)
+
+        preview_stored = ""
+        p_iv = (preview_crypto_iv or "").strip()
+        p_tag = (preview_crypto_tag or "").strip()
+        preview_raw: bytes | None = None
+        if preview_file is not None:
+            preview_raw = await preview_file.read()
+            if preview_raw and is_e2e and (not p_iv or not p_tag):
+                raise HTTPException(
+                    status_code=400, detail="missing_preview_crypto_metadata"
+                )
+
+        jpeg: bytes | None = None
+        if not is_e2e:
+            jpeg = await asyncio.to_thread(build_preview_jpeg, raw, file.content_type)
+            if jpeg:
+                preview_stored = await save_upload(ctx.vault_id, "preview.jpg", jpeg)
+        elif preview_raw:
+            preview_stored = await save_upload(
+                ctx.vault_id, "preview.enc.jpg", preview_raw
+            )
+
         new_id = await db.add_document(
             family_chat_id=ctx.vault_id,
             category=category,
@@ -1131,11 +1476,14 @@ def create_webapp_app() -> FastAPI:
             file_size=len(raw),
             tags=tags.strip(),
             notes=notes.strip(),
+            preview_stored_filename=preview_stored,
+            crypto_encrypted=1 if is_e2e else 0,
+            crypto_iv=(crypto_iv.strip() if is_e2e else ""),
+            crypto_tag=(crypto_tag.strip() if is_e2e else ""),
+            preview_crypto_iv=(p_iv if is_e2e and preview_raw else ""),
+            preview_crypto_tag=(p_tag if is_e2e and preview_raw else ""),
+            encryption_state="encrypted" if is_e2e else "legacy_plaintext",
         )
-        jpeg = await asyncio.to_thread(build_preview_jpeg, raw, file.content_type)
-        if jpeg:
-            pstored = await save_upload(ctx.vault_id, "preview.jpg", jpeg)
-            await db.set_document_preview(ctx.vault_id, new_id, pstored)
         return {
             "id": new_id,
             "category": category,

@@ -1081,6 +1081,19 @@ body {
   min-width: 0;
 }
 
+.vault-modal-h2 {
+  margin: 0 0 8px;
+  font-size: 1.15rem;
+}
+
+.vault-modal-card {
+  max-width: 22rem;
+}
+
+.vault-modal-err {
+  color: #b00020;
+}
+
 .toast {
   position: fixed;
   bottom: 24px;
@@ -1216,6 +1229,13 @@ iframe.admin-claim-receipt-img {
   max-height: min(45vh, 320px);
   height: min(45vh, 320px);
   object-fit: unset;
+}
+
+.admin-claim-actions {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .mono {

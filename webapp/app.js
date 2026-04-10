@@ -72,6 +72,10 @@
     isAdmin: false,
     billingReceiptBlobUrl: null,
     adminClaimUrls: [],
+    vaultLocked: false,
+    vaultCrypto: {},
+    vaultKdfSalt: "",
+    vaultState: "none",
   };
 
   function pack() {
@@ -163,6 +167,29 @@
     "ngrok-skip-browser-warning": "69420",
   });
 
+  /** Mini App + vault cookie: always send credentials for HttpOnly session. */
+  function apiFetch(url, options = {}) {
+    const extra = options.headers || {};
+    const isForm =
+      typeof FormData !== "undefined" && options.body instanceof FormData;
+    const h = { ...headers(), ...extra };
+    if (isForm) delete h["Content-Type"];
+    return fetch(url, {
+      credentials: "same-origin",
+      ...options,
+      headers: h,
+    });
+  }
+
+  /** Non-extractable AES key; in-memory only (cleared on navigation). */
+  let vaultMemoryAesKey = null;
+
+  function clearVaultMemoryKey() {
+    vaultMemoryAesKey = null;
+  }
+
+  window.addEventListener("pagehide", clearVaultMemoryKey);
+
   /** Absolute URL with init in query — required for Telegram.WebApp.downloadFile (HTTPS). */
   function authFileDownloadUrl(docId) {
     const base = window.location.origin || "";
@@ -172,18 +199,21 @@
 
   function downloadBlobToDevice(blob, filename) {
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    try {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } finally {
+      queueMicrotask(() => URL.revokeObjectURL(url));
+    }
   }
 
   async function fetchShareLinkJson(docId) {
-    const r = await fetch(`/api/documents/${docId}/share-link`, { headers: headers() });
+    const r = await apiFetch(`/api/documents/${docId}/share-link`, { headers: headers() });
     if (!r.ok) return null;
     return r.json();
   }
@@ -203,6 +233,143 @@
     if (mime.includes("pdf")) return "📕";
     if (mime.includes("word") || mime.includes("document")) return "📝";
     return "📄";
+  }
+
+  function readCryptoHeaders(r) {
+    return {
+      enc: r.headers.get("X-FamDoc-Encrypted") === "1",
+      iv: r.headers.get("X-FamDoc-Crypto-IV") || "",
+      tag: r.headers.get("X-FamDoc-Crypto-Tag") || "",
+      previewEnc: r.headers.get("X-FamDoc-Preview-Encrypted") === "1",
+    };
+  }
+
+  function docIsEncrypted(doc) {
+    return doc.encryption_state === "encrypted";
+  }
+
+  function isLegacyPlaintext(doc) {
+    return (doc.encryption_state || "legacy_plaintext") === "legacy_plaintext";
+  }
+
+  async function getVaultAesKey() {
+    return vaultMemoryAesKey;
+  }
+
+  async function decryptFileBlob(doc, r, blob) {
+    if (!docIsEncrypted(doc)) return blob;
+    const h = readCryptoHeaders(r);
+    if (!h.enc) return blob;
+    const key = await getVaultAesKey();
+    if (!key) throw new Error("no_vault_key");
+    const V = window.FamDocVaultCrypto;
+    const ab = await blob.arrayBuffer();
+    const plain = await V.decryptBuffer(key, h.iv, h.tag, ab);
+    const mt = doc.mime_type || "application/octet-stream";
+    return new Blob([plain], { type: mt });
+  }
+
+  async function decryptPreviewBlob(doc, r, blob) {
+    const h = readCryptoHeaders(r);
+    if (!h.previewEnc) return blob;
+    const key = await getVaultAesKey();
+    if (!key) throw new Error("no_vault_key");
+    const V = window.FamDocVaultCrypto;
+    const ab = await blob.arrayBuffer();
+    const plain = await V.decryptBuffer(key, h.iv, h.tag, ab);
+    return new Blob([plain], { type: "image/jpeg" });
+  }
+
+  async function buildEncryptedPartsFromPlainBlob(plainBlob, name, mime) {
+    const V = window.FamDocVaultCrypto;
+    const key = await getVaultAesKey();
+    if (!V || !key) throw new Error("no_vault_key");
+    const ab = await plainBlob.arrayBuffer();
+    const { ivB64, tagB64, ciphertext } = await V.encryptBuffer(key, ab);
+    const file = new File([plainBlob], name, {
+      type: mime || "application/octet-stream",
+    });
+    const prevBlob = await V.maybeImagePreviewBlob(file, mime || "");
+    let previewIv = "";
+    let previewTag = "";
+    let previewBlob = null;
+    if (prevBlob) {
+      const pab = await prevBlob.arrayBuffer();
+      const pe = await V.encryptBuffer(key, pab);
+      previewIv = pe.ivB64;
+      previewTag = pe.tagB64;
+      previewBlob = new Blob([pe.ciphertext]);
+    }
+    return {
+      blob: new Blob([ciphertext]),
+      ivB64,
+      tagB64,
+      previewIv,
+      previewTag,
+      previewBlob,
+    };
+  }
+
+  function scheduleLegacyMigrate(doc, plaintextBlob) {
+    if (!isLegacyPlaintext(doc) || !state.vaultKdfSalt) return;
+    void (async () => {
+      const key = await getVaultAesKey();
+      if (!key) return;
+      try {
+        const enc = await buildEncryptedPartsFromPlainBlob(
+          plaintextBlob,
+          doc.original_filename,
+          doc.mime_type,
+        );
+        const fd = new FormData();
+        fd.append("crypto_iv", enc.ivB64);
+        fd.append("crypto_tag", enc.tagB64);
+        fd.append("file", enc.blob, doc.original_filename);
+        if (enc.previewBlob) {
+          fd.append("preview_crypto_iv", enc.previewIv);
+          fd.append("preview_crypto_tag", enc.previewTag);
+          fd.append("preview_file", enc.previewBlob, "preview.enc.jpg");
+        }
+        const r = await apiFetch(`/api/documents/${doc.id}/migrate-crypto`, {
+          method: "POST",
+          body: fd,
+          headers: headers(),
+        });
+        if (r.ok) {
+          doc.encryption_state = "encrypted";
+          loadDocuments().catch(() => {});
+        }
+      } catch {
+        /* retry on next access */
+      }
+    })();
+  }
+
+  async function buildEncryptedUploadParts(file) {
+    const V = window.FamDocVaultCrypto;
+    const key = await getVaultAesKey();
+    if (!V || !key) throw new Error("no_vault_key");
+    const ab = await file.arrayBuffer();
+    const { ivB64, tagB64, ciphertext } = await V.encryptBuffer(key, ab);
+    const prevBlob = await V.maybeImagePreviewBlob(file, file.type || "");
+    let previewIv = "";
+    let previewTag = "";
+    let previewBlob = null;
+    if (prevBlob) {
+      const pab = await prevBlob.arrayBuffer();
+      const pe = await V.encryptBuffer(key, pab);
+      previewIv = pe.ivB64;
+      previewTag = pe.tagB64;
+      previewBlob = new Blob([pe.ciphertext]);
+    }
+    return {
+      blob: new Blob([ciphertext]),
+      ivB64,
+      tagB64,
+      previewIv,
+      previewTag,
+      previewBlob,
+    };
   }
 
   function formatDate(iso) {
@@ -226,7 +393,7 @@
   }
 
   async function apiConfig() {
-    const r = await fetch("/api/config", {
+    const r = await apiFetch("/api/config", {
       headers: { "ngrok-skip-browser-warning": "69420" },
     });
     if (!r.ok) throw new Error("config");
@@ -234,19 +401,19 @@
   }
 
   async function apiBootstrap() {
-    const r = await fetch("/api/bootstrap", { headers: headers() });
+    const r = await apiFetch("/api/bootstrap", { headers: headers() });
     if (!r.ok) throw new Error("bootstrap");
     return r.json();
   }
 
   async function apiAdminStats() {
-    const r = await fetch("/api/admin/stats", { headers: headers() });
+    const r = await apiFetch("/api/admin/stats", { headers: headers() });
     if (!r.ok) throw new Error("admin_stats");
     return r.json();
   }
 
   async function apiAdminManualClaims() {
-    const r = await fetch("/api/admin/manual-claims", { headers: headers() });
+    const r = await apiFetch("/api/admin/manual-claims", { headers: headers() });
     if (!r.ok) throw new Error("admin_claims");
     return r.json();
   }
@@ -260,7 +427,7 @@
       p.set("q", state.searchQ.trim());
     }
     const q = p.toString();
-    const r = await fetch("/api/documents" + (q ? "?" + q : ""), {
+    const r = await apiFetch("/api/documents" + (q ? "?" + q : ""), {
       headers: headers(),
     });
     if (!r.ok) throw new Error("documents");
@@ -353,8 +520,19 @@
 
   function loadThumbForCard(thumbEl, doc) {
     if (!initData) return;
-    fetch(`/api/documents/${doc.id}/preview`, { headers: headers() })
-      .then((r) => (r.ok ? r.blob() : null))
+    apiFetch(`/api/documents/${doc.id}/preview`, { headers: headers() })
+      .then(async (r) => {
+        if (!r.ok) return null;
+        let blob = await r.blob();
+        if (readCryptoHeaders(r).previewEnc) {
+          try {
+            blob = await decryptPreviewBlob(doc, r, blob);
+          } catch {
+            return null;
+          }
+        }
+        return blob;
+      })
       .then((blob) => {
         if (!blob || !thumbEl.isConnected) return;
         const url = URL.createObjectURL(blob);
@@ -653,10 +831,128 @@
     $("#btn-family-sidebar")?.classList.toggle("hidden", hideFam);
     state.isAdmin = !!data.is_admin;
     $("#btn-admin-sidebar")?.classList.toggle("hidden", !state.isAdmin);
+    state.vaultLocked = !!data.vault_locked;
+    state.vaultCrypto = data.vault_crypto || {};
+    state.vaultKdfSalt = (state.vaultCrypto.kdf_salt_b64 || "").trim();
+    state.vaultState = state.vaultCrypto.state || "none";
     renderSidebar();
     setFamilyHeader();
     updateAddDocButton();
   }
+
+  let vaultModalMode = "unlock";
+
+  function openVaultModal(mode) {
+    vaultModalMode = mode;
+    const m = $("#vault-modal");
+    const titleEl = $("#vault-modal-title");
+    const lead = $("#vault-modal-lead");
+    const p2 = $("#vault-pass-2");
+    const p2lab = $("#vault-pass-2-label");
+    const sub = $("#vault-modal-submit");
+    if (!m || !titleEl || !lead || !p2 || !sub) return;
+    m.classList.remove("hidden");
+    $("#vault-pass-1").value = "";
+    $("#vault-pass-2").value = "";
+    $("#vault-modal-err").hidden = true;
+    if (mode === "setup") {
+      titleEl.textContent = t("vaultCreateTitle");
+      lead.textContent = t("vaultCreateLead");
+      p2.classList.remove("hidden");
+      p2lab?.classList.remove("hidden");
+      sub.textContent = t("vaultCreateSubmit");
+    } else {
+      titleEl.textContent = t("vaultUnlockTitle");
+      lead.textContent = t("vaultUnlockLead");
+      p2.classList.add("hidden");
+      p2lab?.classList.add("hidden");
+      sub.textContent = t("vaultUnlockSubmit");
+    }
+  }
+
+  function closeVaultModal() {
+    $("#vault-modal")?.classList.add("hidden");
+  }
+
+  async function runVaultGate() {
+    const V = window.FamDocVaultCrypto;
+    if (!V) return;
+    if (state.vaultState === "none") {
+      openVaultModal("setup");
+      return;
+    }
+    if (vaultMemoryAesKey) return;
+    openVaultModal("unlock");
+  }
+
+  $("#vault-modal-submit")?.addEventListener("click", async () => {
+    const errEl = $("#vault-modal-err");
+    const p1 = $("#vault-pass-1")?.value || "";
+    const p2 = $("#vault-pass-2")?.value || "";
+    const V = window.FamDocVaultCrypto;
+    if (!V) return;
+    errEl.hidden = true;
+    if (vaultModalMode === "setup") {
+      if (p1.length < 10) {
+        errEl.textContent = t("vaultPassTooShort");
+        errEl.hidden = false;
+        return;
+      }
+      if (p1 !== p2) {
+        errEl.textContent = t("vaultPassMismatch");
+        errEl.hidden = false;
+        return;
+      }
+      const r = await postJson("/api/vault/password", { password: p1 });
+      if (!r.ok) {
+        errEl.textContent = t("vaultSetupFail");
+        errEl.hidden = false;
+        return;
+      }
+      const j = await r.json();
+      const salt = j.vault_crypto?.kdf_salt_b64 || "";
+      try {
+        vaultMemoryAesKey = await V.deriveAesKey(p1, salt);
+      } catch {
+        errEl.textContent = t("vaultCryptoFail");
+        errEl.hidden = false;
+        return;
+      }
+      closeVaultModal();
+      try {
+        await refreshBootstrap();
+        await loadDocuments();
+      } catch {
+        showToast(t("toastConnection"));
+      }
+      return;
+    }
+    const r2 = await postJson("/api/vault/unlock", { password: p1 });
+    if (!r2.ok) {
+      errEl.textContent =
+        r2.status === 429
+          ? t("vaultRateLimited")
+          : t("vaultUnlockFail");
+      errEl.hidden = false;
+      return;
+    }
+    const j2 = await r2.json();
+    const salt2 = j2.vault_crypto?.kdf_salt_b64 || state.vaultKdfSalt;
+    try {
+      vaultMemoryAesKey = await V.deriveAesKey(p1, salt2);
+    } catch {
+      errEl.textContent = t("vaultCryptoFail");
+      errEl.hidden = false;
+      return;
+    }
+    closeVaultModal();
+    try {
+      await refreshBootstrap();
+      await loadDocuments();
+    } catch {
+      showToast(t("toastConnection"));
+    }
+  });
 
   async function boot() {
     fillLangSelect();
@@ -683,6 +979,8 @@
 
     try {
       await refreshBootstrap();
+      await runVaultGate();
+      if (!$("#vault-modal")?.classList.contains("hidden")) return;
       await loadDocuments();
     } catch {
       showToast(t("toastConnection"));
@@ -884,13 +1182,38 @@
       fd.append("category", cat);
       fd.append("tags", tags);
       fd.append("notes", notes);
-      fd.append("file", file);
+      const useE2e =
+        state.vaultState === "unlocked" &&
+        !!state.vaultKdfSalt &&
+        !!vaultMemoryAesKey;
+      if (useE2e) {
+        let enc;
+        try {
+          enc = await buildEncryptedUploadParts(file);
+        } catch {
+          showToast(t("vaultCryptoFail"));
+          errorExit = true;
+          break;
+        }
+        fd.append("crypto_mode", "e2e");
+        fd.append("crypto_iv", enc.ivB64);
+        fd.append("crypto_tag", enc.tagB64);
+        fd.append("file", enc.blob, file.name);
+        if (enc.previewBlob) {
+          fd.append("preview_crypto_iv", enc.previewIv);
+          fd.append("preview_crypto_tag", enc.previewTag);
+          fd.append("preview_file", enc.previewBlob, "preview.enc.jpg");
+        }
+      } else {
+        fd.append("crypto_mode", "plaintext");
+        fd.append("file", file);
+      }
       if (total === 1 && displayLine) {
         fd.append("display_name", displayLine);
       } else {
         fd.append("display_name", "");
       }
-      const r = await fetch("/api/upload", {
+      const r = await apiFetch("/api/upload", {
         method: "POST",
         headers: headers(),
         body: fd,
@@ -962,8 +1285,18 @@
 
     const mime = doc.mime_type || "";
     const loadBlob = () =>
-      fetch(`/api/documents/${doc.id}/file`, { headers: headers() }).then((r) =>
-        r.ok ? r.blob() : Promise.reject(),
+      apiFetch(`/api/documents/${doc.id}/file`, { headers: headers() }).then(
+        async (r) => {
+          if (!r.ok) return Promise.reject();
+          let blob = await r.blob();
+          if (docIsEncrypted(doc)) {
+            blob = await decryptFileBlob(doc, r, blob);
+          }
+          if (isLegacyPlaintext(doc)) {
+            scheduleLegacyMigrate(doc, blob);
+          }
+          return blob;
+        },
       );
 
     const narrowForPdf =
@@ -982,8 +1315,15 @@
       const showRasterPdf =
         narrowForPdf && doc.has_preview === true;
       if (showRasterPdf) {
-        fetch(`/api/documents/${doc.id}/preview`, { headers: headers() })
-          .then((r) => (r.ok ? r.blob() : Promise.reject()))
+        apiFetch(`/api/documents/${doc.id}/preview`, { headers: headers() })
+          .then(async (r) => {
+            if (!r.ok) return Promise.reject();
+            let blob = await r.blob();
+            if (readCryptoHeaders(r).previewEnc) {
+              blob = await decryptPreviewBlob(doc, r, blob);
+            }
+            return blob;
+          })
           .then((blob) => {
             const url = URL.createObjectURL(blob);
             previewUrls.push(url);
@@ -1031,9 +1371,9 @@
       tags: $("#detail-tags").value.trim(),
       notes: $("#detail-notes").value.trim(),
     };
-    const r = await fetch(`/api/documents/${doc.id}`, {
+    const r = await apiFetch(`/api/documents/${doc.id}`, {
       method: "PATCH",
-      headers: { ...headers(), "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     if (!r.ok) {
@@ -1052,7 +1392,7 @@
     if (!doc) return;
     syncInitData();
     const fname = doc.original_filename;
-    if (typeof tg?.downloadFile === "function" && initData) {
+    if (!docIsEncrypted(doc) && typeof tg?.downloadFile === "function" && initData) {
       tg.downloadFile(
         { url: authFileDownloadUrl(doc.id), file_name: fname },
         (accepted) => {
@@ -1061,12 +1401,22 @@
       );
       return;
     }
-    const r = await fetch(`/api/documents/${doc.id}/file`, { headers: headers() });
+    const r = await apiFetch(`/api/documents/${doc.id}/file`, { headers: headers() });
     if (!r.ok) {
       showToast(t("toastDownloadFail"));
       return;
     }
-    const blob = await r.blob();
+    let blob = await r.blob();
+    if (docIsEncrypted(doc)) {
+      try {
+        blob = await decryptFileBlob(doc, r, blob);
+      } catch {
+        showToast(t("toastDownloadFail"));
+        return;
+      }
+    } else if (isLegacyPlaintext(doc)) {
+      scheduleLegacyMigrate(doc, blob);
+    }
     downloadBlobToDevice(blob, fname);
   });
 
@@ -1074,12 +1424,22 @@
     const doc = state.currentDetail;
     if (!doc) return;
     syncInitData();
-    const r = await fetch(`/api/documents/${doc.id}/file`, { headers: headers() });
+    const r = await apiFetch(`/api/documents/${doc.id}/file`, { headers: headers() });
     if (!r.ok) {
       showToast(t("toastShareFail"));
       return;
     }
-    const blob = await r.blob();
+    let blob = await r.blob();
+    if (docIsEncrypted(doc)) {
+      try {
+        blob = await decryptFileBlob(doc, r, blob);
+      } catch {
+        showToast(t("toastShareFail"));
+        return;
+      }
+    } else if (isLegacyPlaintext(doc)) {
+      scheduleLegacyMigrate(doc, blob);
+    }
     const file = new File([blob], doc.original_filename, {
       type: doc.mime_type || blob.type || "application/octet-stream",
     });
@@ -1115,7 +1475,7 @@
     const doc = state.currentDetail;
     if (!doc) return;
     syncInitData();
-    const r = await fetch(`/api/documents/${doc.id}/share-link`, { headers: headers() });
+    const r = await apiFetch(`/api/documents/${doc.id}/share-link`, { headers: headers() });
     if (r.status === 503) {
       showToast(t("toastShareUnavailable"));
       return;
@@ -1137,7 +1497,7 @@
   $("#detail-delete")?.addEventListener("click", async () => {
     const doc = state.currentDetail;
     if (!doc || !confirm(t("confirmDeleteOne"))) return;
-    const r = await fetch(`/api/documents/${doc.id}`, {
+    const r = await apiFetch(`/api/documents/${doc.id}`, {
       method: "DELETE",
       headers: headers(),
     });
@@ -1167,9 +1527,9 @@
   });
 
   async function postJson(url, body) {
-    return fetch(url, {
+    return apiFetch(url, {
       method: "POST",
-      headers: { ...headers(), "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
   }
@@ -1333,8 +1693,9 @@
           }),
         );
         const when = escapeHtml(formatDate(m.claimed_at));
+        const rid = String(m.user_id ?? "");
         const receiptSlot = m.has_receipt
-          ? `<div class="admin-claim-receipt-slot" data-claim-uid="${String(m.user_id ?? "")}"></div>`
+          ? `<div class="admin-claim-receipt-slot" data-claim-uid="${rid}"></div>`
           : "";
         return `<article class="admin-claim-card" aria-label="${uid}">
           <div class="admin-claim-grid">
@@ -1345,6 +1706,9 @@
             <div><span class="admin-claim-k">${escapeHtml(t("adminClaimColTime"))}</span><span class="admin-claim-v">${when}</span></div>
           </div>
           ${receiptSlot}
+          <div class="admin-claim-actions">
+            <button type="button" class="btn-danger outline admin-claim-deny" data-user-id="${rid}">${escapeHtml(t("adminClaimDeny"))}</button>
+          </div>
         </article>`;
       })
       .join("");
@@ -1356,7 +1720,7 @@
       );
       if (!slot) continue;
       try {
-        const r = await fetch(`/api/admin/claim-receipt/${uid}`, {
+        const r = await apiFetch(`/api/admin/claim-receipt/${uid}`, {
           headers: headers(),
         });
         if (!r.ok) continue;
@@ -1422,7 +1786,7 @@
     if (!ul) return;
     ul.innerHTML = "";
     try {
-      const r = await fetch("/api/family", { headers: headers() });
+      const r = await apiFetch("/api/family", { headers: headers() });
       const d = await r.json();
       if (!d.family_features) {
         const li = document.createElement("li");
@@ -1467,6 +1831,42 @@
   $("#admin-modal")?.addEventListener("click", (e) => {
     if (e.target.id === "admin-modal") closeAdminModal();
   });
+
+  $("#admin-claims-body")?.addEventListener("click", async (e) => {
+    const btn = e.target.closest?.(".admin-claim-deny");
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const uid = parseInt(btn.getAttribute("data-user-id") || "", 10);
+    if (!Number.isFinite(uid) || uid < 1) return;
+    if (!confirm(t("adminClaimDenyConfirm"))) return;
+    const r = await postJson("/api/admin/deny-claim", {
+      target_user_id: uid,
+    });
+    if (!r.ok) {
+      let msg = t("adminClaimDenyFail");
+      try {
+        const err = await r.json();
+        if (err.detail === "no_such_claim") msg = t("adminClaimDenyGone");
+      } catch (_) {
+        /* ignore */
+      }
+      showToast(msg);
+      return;
+    }
+    showToast(t("adminClaimDenied"));
+    try {
+      const [s, c] = await Promise.all([
+        apiAdminStats(),
+        apiAdminManualClaims(),
+      ]);
+      renderAdminStats(s);
+      await renderAdminClaims(c);
+    } catch (_) {
+      /* ignore */
+    }
+  });
+
   $("#admin-grant-submit")?.addEventListener("click", async () => {
     const uidRaw = $("#admin-target-uid")?.value?.trim() || "";
     const slotsRaw = $("#admin-slots-input")?.value?.trim() || "";
@@ -1530,9 +1930,9 @@
       showToast(t("toastInviteEmpty"));
       return;
     }
-    const r = await fetch("/api/family/accept", {
+    const r = await apiFetch("/api/family/accept", {
       method: "POST",
-      headers: { ...headers(), "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ invite: raw }),
     });
     if (!r.ok) {
@@ -1572,9 +1972,9 @@
 
   $("#invite-generate")?.addEventListener("click", async () => {
     const phone = $("#invite-phone")?.value?.trim() || "";
-    const r = await fetch("/api/family/invite", {
+    const r = await apiFetch("/api/family/invite", {
       method: "POST",
-      headers: { ...headers(), "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ phone }),
     });
     if (!r.ok) {
@@ -1650,7 +2050,7 @@
     fd.append("price_uzs", String(tier.price_uzs));
     fd.append("slots", String(tier.slots));
     fd.append("receipt", file);
-    const r = await fetch("/api/billing/manual-claim", {
+    const r = await apiFetch("/api/billing/manual-claim", {
       method: "POST",
       headers: headers(),
       body: fd,

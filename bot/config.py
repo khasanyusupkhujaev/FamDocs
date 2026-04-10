@@ -103,6 +103,19 @@ WEBAPP_MENU_BUTTON_TEXT = (os.getenv("WEBAPP_MENU_BUTTON_TEXT", "FamDocs") or "F
 WEBAPP_HOST = os.getenv("WEBAPP_HOST", "0.0.0.0").strip()
 WEBAPP_PORT = int(os.getenv("WEBAPP_PORT", "8080"))
 
+
+def _infer_secure_cookies() -> bool:
+    """Use Secure flag on vault/admin cookies; prefer HTTPS public URL or explicit env."""
+    raw = os.getenv("FAMDOC_SECURE_COOKIES", "").strip().lower()
+    if raw in ("1", "true", "yes"):
+        return True
+    if raw in ("0", "false", "no"):
+        return False
+    return bool(_webapp and _webapp.lower().startswith("https://"))
+
+
+SECURE_COOKIES = _infer_secure_cookies()
+
 # Free tier: max documents per vault (web + Telegram). Set to 0 to disable the cap.
 FREE_DOCUMENT_LIMIT = int(os.getenv("FAMDOC_FREE_DOCUMENT_LIMIT", "10"))
 

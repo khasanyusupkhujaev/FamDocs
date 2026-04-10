@@ -146,6 +146,7 @@
               const receiptSlot = c.has_receipt
                 ? `<div class="adm-receipt-slot" data-user="${uid}">Loading receipt…</div>`
                 : "";
+              const denyId = String(c.user_id ?? "");
               return `<article class="adm-claim">
               <dl>
                 <dt>Telegram ID</dt><dd class="mono">${uid}</dd>
@@ -155,6 +156,9 @@
                 <dt>Submitted</dt><dd>${when}</dd>
               </dl>
               ${receiptSlot}
+              <div class="adm-claim-actions">
+                <button type="button" class="adm-btn adm-btn-deny adm-claim-deny" data-user-id="${denyId}">Deny (remove claim)</button>
+              </div>
             </article>`;
             })
             .join("");
@@ -190,6 +194,43 @@
       $("adm-dashboard")?.classList.add("hidden");
     }
   }
+
+  $("adm-claims")?.addEventListener("click", async (e) => {
+    const btn = e.target.closest?.(".adm-claim-deny");
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const uid = parseInt(btn.getAttribute("data-user-id") || "", 10);
+    if (!Number.isFinite(uid) || uid < 1) return;
+    if (
+      !confirm(
+        "Remove this payment claim without granting slots? The receipt file will be deleted.",
+      )
+    ) {
+      return;
+    }
+    try {
+      const r = await fetch("/admin/api/deny-claim", {
+        ...fetchOpts,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target_user_id: uid }),
+      });
+      if (r.status === 404) {
+        showError("That claim is no longer pending.");
+        await loadDashboard();
+        return;
+      }
+      if (!r.ok) {
+        showError("Could not remove claim.");
+        return;
+      }
+      showError("");
+      await loadDashboard();
+    } catch {
+      showError("Network error.");
+    }
+  });
 
   $("adm-logout-btn")?.addEventListener("click", async () => {
     try {
