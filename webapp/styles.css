@@ -44,6 +44,8 @@
 
 html {
   overflow-x: clip;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 html,
@@ -1284,6 +1286,26 @@ body {
 .field-input.area {
   resize: vertical;
   min-height: 72px;
+}
+
+/*
+ * iOS Safari / Telegram WebView: focusing inputs with computed font-size < 16px
+ * zooms the entire page; the zoom often persists after the keyboard closes.
+ * Use at least 16px on touch devices for all form controls.
+ */
+@media (pointer: coarse) {
+  .field-input,
+  .field-input.mono,
+  .field-input.area,
+  .invite-link-row .field-input,
+  .search-wrap input,
+  .lang-select,
+  .more-menu-row .lang-select,
+  select.field-input,
+  textarea.field-input {
+    font-size: 16px !important;
+    line-height: 1.4;
+  }
 }
 
 .drop-zone {
