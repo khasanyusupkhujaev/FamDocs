@@ -292,6 +292,104 @@
     return "📄";
   }
 
+  /** Guess MIME from filename when DB / headers are missing (common after legacy uploads). */
+  function guessMimeFromFilename(name) {
+    const n = (name || "").toLowerCase();
+    const dot = n.lastIndexOf(".");
+    if (dot < 0) return "";
+    const ext = n.slice(dot);
+    const map = {
+      ".pdf": "application/pdf",
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".jfif": "image/jpeg",
+      ".gif": "image/gif",
+      ".webp": "image/webp",
+      ".bmp": "image/bmp",
+      ".tif": "image/tiff",
+      ".tiff": "image/tiff",
+      ".heic": "image/heic",
+      ".heif": "image/heif",
+    };
+    return map[ext] || "";
+  }
+
+  /**
+   * Inspect decrypted bytes when Content-Type / DB mime is wrong or octet-stream.
+   */
+  function sniffMimeFromArrayBuffer(ab) {
+    const n = ab.byteLength;
+    if (n < 4) return "";
+    const u8 = new Uint8Array(ab, 0, Math.min(n, 64));
+    if (u8[0] === 0x25 && u8[1] === 0x50 && u8[2] === 0x44 && u8[3] === 0x46)
+      return "application/pdf";
+    if (u8[0] === 0xff && u8[1] === 0xd8 && u8[2] === 0xff) return "image/jpeg";
+    if (
+      n >= 8 &&
+      u8[0] === 0x89 &&
+      u8[1] === 0x50 &&
+      u8[2] === 0x4e &&
+      u8[3] === 0x47 &&
+      u8[4] === 0x0d &&
+      u8[5] === 0x0a &&
+      u8[6] === 0x1a &&
+      u8[7] === 0x0a
+    )
+      return "image/png";
+    if (n >= 6 && u8[0] === 0x47 && u8[1] === 0x49 && u8[2] === 0x46 && u8[3] === 0x38)
+      return "image/gif";
+    if (
+      n >= 12 &&
+      u8[0] === 0x52 &&
+      u8[1] === 0x49 &&
+      u8[2] === 0x46 &&
+      u8[3] === 0x46 &&
+      u8[8] === 0x57 &&
+      u8[9] === 0x45 &&
+      u8[10] === 0x42 &&
+      u8[11] === 0x50
+    )
+      return "image/webp";
+    return "";
+  }
+
+  /**
+   * True when doc.mime_type alone is enough to choose image vs PDF preview.
+   */
+  function docMimeClearlyRenderable(doc) {
+    const m = (doc.mime_type || "").trim().toLowerCase();
+    if (!m || m === "application/octet-stream") return false;
+    if (m.startsWith("image/")) return true;
+    if (m.includes("pdf")) return true;
+    return false;
+  }
+
+  /**
+   * Effective MIME for preview after decrypt: DB, blob, magic bytes, then filename.
+   */
+  async function resolveDocumentMime(doc, blob) {
+    const docM = (doc.mime_type || "").trim().toLowerCase();
+    if (docM && docM !== "application/octet-stream") return doc.mime_type.trim();
+
+    const blobM = (blob.type || "").trim().toLowerCase();
+    if (blobM && blobM !== "application/octet-stream") return blob.type.trim();
+
+    let ab;
+    try {
+      ab = await blob.slice(0, 64).arrayBuffer();
+    } catch {
+      ab = await blob.arrayBuffer();
+    }
+    const sniffed = sniffMimeFromArrayBuffer(ab);
+    if (sniffed) return sniffed;
+
+    const fromName = guessMimeFromFilename(doc.original_filename);
+    if (fromName) return fromName;
+
+    return (blob.type && blob.type.trim()) || "application/octet-stream";
+  }
+
   function readCryptoHeaders(r) {
     return {
       enc: r.headers.get("X-FamDoc-Encrypted") === "1",
@@ -322,7 +420,16 @@
     const V = window.FamDocVaultCrypto;
     const ab = await blob.arrayBuffer();
     const plain = await V.decryptBuffer(key, h.iv, h.tag, ab);
-    const mt = doc.mime_type || "application/octet-stream";
+    let mt = (doc.mime_type || "").trim();
+    if (!mt || mt === "application/octet-stream") {
+      const sniffed = sniffMimeFromArrayBuffer(plain);
+      if (sniffed) mt = sniffed;
+      else {
+        const g = guessMimeFromFilename(doc.original_filename);
+        if (g) mt = g;
+      }
+    }
+    if (!mt) mt = "application/octet-stream";
     return new Blob([plain], { type: mt });
   }
 
@@ -1646,40 +1753,74 @@
       return true;
     }
 
-    if (mime.startsWith("image/")) {
-      fetchDecryptedDocumentBlob(doc)
-        .then((blob) => {
-          state.detailFileCache = { id: doc.id, blob };
-          showImagePreview(blob);
-        })
-        .catch(() => {
-          loadPreviewThumb()
-            .then((b) => {
+    /** When DB mime is missing or generic, load bytes and infer image vs PDF. */
+    async function showDetailFromResolvedBlob(blob) {
+      const resolved = await resolveDocumentMime(doc, blob);
+      state.detailFileCache = { id: doc.id, blob };
+      if (resolved.startsWith("image/")) {
+        showImagePreview(blob);
+        return;
+      }
+      if (resolved.includes("pdf")) {
+        if (await renderPdfDetailAllPages(blob, prev)) return;
+        if (await showPdfRasterFromDecryptedBlob(blob)) return;
+        showPdfIframe(blob);
+        return;
+      }
+      prev.innerHTML = `<div class="detail-preview-frame"><div class="ph">${mimeIcon(resolved)}</div></div>`;
+    }
+
+    if (docMimeClearlyRenderable(doc)) {
+      if (mime.startsWith("image/")) {
+        fetchDecryptedDocumentBlob(doc)
+          .then((blob) => {
+            state.detailFileCache = { id: doc.id, blob };
+            showImagePreview(blob);
+          })
+          .catch(() => {
+            loadPreviewThumb()
+              .then((b) => {
+                showImagePreview(b);
+              })
+              .catch(() => {});
+          });
+      } else if (mime.includes("pdf")) {
+        void (async () => {
+          try {
+            const blob = await fetchDecryptedDocumentBlob(doc);
+            state.detailFileCache = { id: doc.id, blob };
+            if (await renderPdfDetailAllPages(blob, prev)) return;
+            if (await showPdfRasterFromDecryptedBlob(blob)) return;
+            showPdfIframe(blob);
+          } catch (_) {
+            try {
+              const b = await loadPreviewThumb();
+              state.detailFileCache = null;
               showImagePreview(b);
-            })
-            .catch(() => {});
-        });
-    } else if (mime.includes("pdf")) {
+            } catch {
+              state.detailFileCache = null;
+              /* keep placeholder */
+            }
+          }
+        })();
+      } else {
+        state.detailFileCache = null;
+      }
+    } else {
       void (async () => {
         try {
           const blob = await fetchDecryptedDocumentBlob(doc);
-          state.detailFileCache = { id: doc.id, blob };
-          if (await renderPdfDetailAllPages(blob, prev)) return;
-          if (await showPdfRasterFromDecryptedBlob(blob)) return;
-          showPdfIframe(blob);
-        } catch (_) {
+          await showDetailFromResolvedBlob(blob);
+        } catch {
           try {
             const b = await loadPreviewThumb();
             state.detailFileCache = null;
             showImagePreview(b);
           } catch {
             state.detailFileCache = null;
-            /* keep placeholder */
           }
         }
       })();
-    } else {
-      state.detailFileCache = null;
     }
   }
 
@@ -1717,7 +1858,7 @@
       return;
     }
 
-    const mime = doc.mime_type || "";
+    const mime = await resolveDocumentMime(doc, blob);
     if (mime.startsWith("image/")) {
       const url = URL.createObjectURL(blob);
       fullPreviewUrls.push(url);
